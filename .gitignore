@@ -1,0 +1,38 @@
+# Python
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+# Never commit virtual environment folders
+.env
+.venv
+env/
+venv/
+ENV/
+pip-selfcheck.json # Created by pip
+
+# IDE and editor specific files
+.vscode/
+.idea/
+*.swp          # Vim swap files
+*.swo          # Vim swap files
+
+# OS generated files
+.DS_Store      # macOS
+Thumbs.db      # Windows
+
+# Log files
+*.log
+logs/
+
+# Model checkpoint files
+trained_models_cnn/cnn_model.pth
+trained_models_vit/vit_model.pth
