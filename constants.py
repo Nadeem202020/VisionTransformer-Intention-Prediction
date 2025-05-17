@@ -64,8 +64,8 @@ INTENTION_HORIZON_STEPS = int(INTENTION_HORIZON_SECS * 10) # Horizon in steps (a
 MIN_SPEED_STOPPED = 0.5                   # m/s: Speed threshold to consider a vehicle stopped
 MIN_SPEED_MOVING = 1.0                    # m/s: Speed threshold to consider a vehicle actively maneuvering
 
-HEADING_CHANGE_THRESH_TURN = np.radians(28) # Radians: Heading change over horizon for turn classification
-HEADING_CHANGE_THRESH_LANE_KEEP = np.radians(10) # Radians: Max heading change for lane keeping
+HEADING_CHANGE_THRESH_TURN = np.radians(20) # Radians: Heading change over horizon for turn classification
+HEADING_CHANGE_THRESH_LANE_KEEP = np.radians(5) # Radians: Max heading change for lane keeping
 
 PARKED_MAX_DISP_M = 0.5                   # Meters: Max displacement for a vehicle to be considered parked
 KEEP_LANE_MAX_LAT_DIST_FALLBACK = 0.5     # Meters: Max lateral deviation for keep-lane (fallback if no map)
