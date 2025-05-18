@@ -46,7 +46,7 @@ if __name__ == '__main__':
         'lidar_layers': [2, 2, 2],
         'map_layers': [2, 2, 2]
     }
-    FEATURE_MAP_STRIDE_CNN = 8 # Based on CNNBackbone architecture
+    FEATURE_MAP_STRIDE_CNN = 16 # Based on CNNBackbone architecture
 
     print(f"--- CNN Training Configuration ---")
     print(f"Device: {DEVICE}")
