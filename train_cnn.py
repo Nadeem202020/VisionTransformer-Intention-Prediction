@@ -41,12 +41,13 @@ if __name__ == '__main__':
         'block': BasicBlock,
         'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
         'map_input_channels': MAP_CHANNELS,
-        'lidar_init_features': 64,
-        'map_init_features': 32,
-        'lidar_layers': [2, 2, 2],
-        'map_layers': [2, 2, 2]
+        'lidar_s1_planes': 160, 'lidar_s2_planes': 192, 'lidar_s3_planes': 224,
+        'map_s1_planes': 32, 'map_s2_planes': 64, 'map_s3_planes': 96,
+        'fusion_block_planes': 512, 'fusion_block_layers': 2,
+        'num_blocks_per_stage': 2,
+        'res_block2_kernel_size': 5, 'fusion_block_kernel_size': 3
     }
-    FEATURE_MAP_STRIDE_CNN = 16 # Based on CNNBackbone architecture
+    FEATURE_MAP_STRIDE_CNN = 8 # Based on CNNBackbone architecture
 
     print(f"--- CNN Training Configuration ---")
     print(f"Device: {DEVICE}")

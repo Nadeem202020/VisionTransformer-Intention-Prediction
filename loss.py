@@ -6,6 +6,7 @@ from torchvision.ops import sigmoid_focal_loss
 from constants import DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO
 from utils import compute_axis_aligned_iou, compute_rotated_iou
 
+
 class DetectionIntentionLoss(nn.Module):
     def __init__(self,
                  iou_threshold=0.6,
