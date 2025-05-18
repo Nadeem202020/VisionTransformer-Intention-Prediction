@@ -7,161 +7,209 @@ from constants import DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RA
 from utils import compute_axis_aligned_iou, compute_rotated_iou
 
 class DetectionIntentionLoss(nn.Module):
-    """
-    Multi-task loss for object detection and intention prediction.
-    - Classification: Focal Loss.
-    - Bounding Box Regression: Smooth L1 Loss.
-    - Intention Prediction: Cross-Entropy Loss (with optional downsampling).
-    """
     def __init__(self,
-                 iou_threshold: float = 0.6,
-                 neg_iou_threshold: float = 0.45,
-                 box_reg_weight: float = 1.0,
-                 cls_focal_weight: float = 1.0,
-                 intent_ce_weight: float = 0.5,
-                 intention_class_weights: torch.Tensor | None = None, # For weighted CE if not downsampling
-                 use_rotated_iou: bool = False,
-                 focal_loss_alpha: float = 0.25,
-                 focal_loss_gamma: float = 2.0,
-                 smooth_l1_beta: float = 1.0 / 9.0,
-                 apply_intention_downsampling: bool = True,
-                 dominant_intentions: set = DOMINANT_CLASSES_FOR_DOWNSAMPLING,
-                 intention_downsample_ratio: float = INTENTION_DOWNSAMPLE_RATIO):
+                 iou_threshold=0.6,
+                 neg_iou_threshold=0.45,
+                 box_weight=1.0,
+                 cls_weight=1.0,
+                 intent_weight=0.5,
+                 intention_class_weights=None,
+                 use_rotated_iou=False,
+                 focal_loss_alpha=0.25,
+                 focal_loss_gamma=2.0,
+                 smooth_l1_beta=1.0 / 9.0,
+                 apply_intention_downsampling=True,
+                 dominant_intentions=DOMINANT_INTENTION_CLASSES_PAPER,
+                 intention_downsample_ratio=INTENTION_DOWNSAMPLE_RATIO_PAPER
+                 ):
         super().__init__()
         self.iou_threshold = iou_threshold
         self.neg_iou_threshold = neg_iou_threshold
-        self.box_reg_weight = box_reg_weight
-        self.cls_focal_weight = cls_focal_weight
-        self.intent_ce_weight = intent_ce_weight
+        self.box_weight = box_weight
+        self.cls_weight = cls_weight
+        self.intent_weight = intent_weight
         self.use_rotated_iou = use_rotated_iou
         self.focal_loss_alpha = focal_loss_alpha
         self.focal_loss_gamma = focal_loss_gamma
         self.smooth_l1_beta = smooth_l1_beta
 
         self.apply_intention_downsampling = apply_intention_downsampling
-        self.dominant_intentions = dominant_intentions
+        self.dominant_intentions = set(dominant_intentions)
         self.intention_downsample_keep_prob = 1.0 - intention_downsample_ratio
 
-        effective_ce_weights = None
+        effective_intention_weights = None
         if not self.apply_intention_downsampling and intention_class_weights is not None:
-            effective_ce_weights = intention_class_weights
-        
-        self.register_buffer('ce_intention_weights', effective_ce_weights)
-        self.intention_criterion = nn.CrossEntropyLoss(
-            weight=self.ce_intention_weights, reduction='none'
-        )
-        # print(f"DetectionIntentionLoss Initialized. Downsampling: {self.apply_intention_downsampling}")
+             effective_intention_weights = intention_class_weights
 
-    def forward(self, cls_logits: torch.Tensor, box_preds_rel: torch.Tensor,
-                intention_logits: torch.Tensor, anchors: torch.Tensor,
-                gt_list: list[dict]) -> dict[str, torch.Tensor]:
-        
-        batch_size, num_total_anchors = cls_logits.shape[0], anchors.shape[0]
+        self.register_buffer('final_intention_class_weights', effective_intention_weights)
+        self.intention_criterion = nn.CrossEntropyLoss(weight=self.final_intention_class_weights, reduction='none')
+
+        print(f"Loss Initialized: Use Rotated IoU: {self.use_rotated_iou}, Apply Intention Downsampling: {self.apply_intention_downsampling}, "
+              f"Downsample Ratio: {intention_downsample_ratio if self.apply_intention_downsampling else 'N/A'}, Intent Weight: {self.intent_weight}")
+        if self.final_intention_class_weights is not None:
+            weights_to_print = self.final_intention_class_weights.cpu().numpy().round(4)
+            print(f"  Using Intention Class Weights: {weights_to_print}")
+        elif self.apply_intention_downsampling:
+             print(f"  Using Intention Downsampling for classes: {self.dominant_intentions} (Keep Prob: {self.intention_downsample_keep_prob:.2f})")
+        else:
+             print("  Using standard CrossEntropyLoss for Intention (no weights/downsampling).")
+
+
+    def forward(self, cls_logits, box_preds, intention_logits, anchors, gt_list):
+        B = cls_logits.shape[0]
+        N_total_anchors = anchors.shape[0]
         device = cls_logits.device
-        anchors_dev = anchors.to(device)
+        anchors = anchors.to(device)
 
-        cls_targets = torch.full((batch_size, num_total_anchors), -1, dtype=torch.long, device=device)
-        box_targets_encoded = torch.zeros((batch_size, num_total_anchors, 6), dtype=torch.float32, device=device)
-        intention_targets = torch.full((batch_size, num_total_anchors), -1, dtype=torch.long, device=device)
+        cls_targets = torch.full((B, N_total_anchors), -1, dtype=torch.long, device=device)
+        box_targets = torch.zeros((B, N_total_anchors, 6), dtype=torch.float32, device=device)
+        intention_targets = torch.full((B, N_total_anchors), -1, dtype=torch.long, device=device)
 
-        for b_idx in range(batch_size):
-            gt_boxes_item = gt_list[b_idx]['boxes_xywha'].to(device)
-            gt_intentions_item = gt_list[b_idx]['intentions'].to(device)
-            num_gt_item = gt_boxes_item.shape[0]
+        for b in range(B):
+            if not isinstance(gt_list[b], dict) or 'boxes_xywha' not in gt_list[b] or 'intentions' not in gt_list[b]:
+                cls_targets[b, :] = 0
+                continue
 
-            if num_gt_item == 0:
-                cls_targets[b_idx, :] = 0; continue
+            gt_boxes_item = gt_list[b]['boxes_xywha'].to(device)
+            gt_intentions_item = gt_list[b]['intentions'].to(device)
+            num_gt = gt_boxes_item.shape[0]
+
+            if num_gt == 0:
+                cls_targets[b, :] = 0
+                continue
 
             iou_func = compute_rotated_iou if self.use_rotated_iou else compute_axis_aligned_iou
-            iou_args = (anchors_dev, gt_boxes_item) if self.use_rotated_iou else \
-                       (anchors_dev[:, :4], gt_boxes_item[:, :4])
-            iou_matrix = iou_func(*iou_args)
+            current_anchors = anchors
+            # Note: If using axis_aligned_iou, ensure current_anchors and gt_boxes_item are in xyxy or compatible format.
+            # This logic might need to be adapted based on your specific IoU function inputs.
+            # e.g., if anchors are [xc,yc,w,h,a] and AA IoU needs [x1,y1,x2,y2]:
+            # if not self.use_rotated_iou:
+            #     anchors_xyxy = convert_xywha_to_xyxy(current_anchors) # Implement this conversion
+            #     gt_boxes_item_xyxy = convert_xywha_to_xyxy(gt_boxes_item) # Implement this
+            #     iou_args = (anchors_xyxy, gt_boxes_item_xyxy)
+            # else:
+            iou_args = (current_anchors, gt_boxes_item)
+
+            try:
+                iou_matrix = iou_func(*iou_args)
+            except Exception as e:
+                print(f"Error in iou_func: {e}. Shapes: anchors={current_anchors.shape}, gt_boxes={gt_boxes_item.shape}")
+                raise e
 
             max_iou_per_anchor, max_iou_gt_idx_per_anchor = iou_matrix.max(dim=1)
-            
-            neg_mask_item = max_iou_per_anchor < self.neg_iou_threshold
-            cls_targets[b_idx, neg_mask_item] = 0
-            pos_mask_item = max_iou_per_anchor >= self.iou_threshold
-            
-            for gt_i in range(num_gt_item):
-                gt_iou_with_anchors = iou_matrix[:, gt_i]
-                best_anchor_iou_for_this_gt, best_anchor_idx_for_this_gt = gt_iou_with_anchors.max(dim=0)
-                if best_anchor_iou_for_this_gt >= self.neg_iou_threshold:
-                    pos_mask_item[best_anchor_idx_for_this_gt] = True
-                    max_iou_gt_idx_per_anchor[best_anchor_idx_for_this_gt] = gt_i
-            
-            cls_targets[b_idx, pos_mask_item] = 1
-            positive_anchor_indices_item = torch.where(pos_mask_item)[0]
 
-            if positive_anchor_indices_item.numel() > 0:
-                assigned_gt_indices = max_iou_gt_idx_per_anchor[positive_anchor_indices_item]
-                pos_anchors_item = anchors_dev[positive_anchor_indices_item]
-                matched_gt_boxes = gt_boxes_item[assigned_gt_indices]
-                matched_gt_intentions = gt_intentions_item[assigned_gt_indices]
+            neg_mask_item = max_iou_per_anchor < self.neg_iou_threshold
+            cls_targets[b, neg_mask_item] = 0
+
+            pos_mask_item = max_iou_per_anchor >= self.iou_threshold
+            cls_targets[b, pos_mask_item] = 1
+            # assigned_gt_indices_for_pos_anchors = max_iou_gt_idx_per_anchor[pos_mask_item] # Will be set later with final_pos_mask_item
+
+            if num_gt > 0:
+                 _, max_iou_anchor_idx_per_gt = iou_matrix.max(dim=0)
+                 for gt_idx_force in range(num_gt):
+                    anchor_idx_force = max_iou_anchor_idx_per_gt[gt_idx_force]
+                    if not pos_mask_item[anchor_idx_force] and iou_matrix[anchor_idx_force, gt_idx_force] >= self.neg_iou_threshold:
+                        pos_mask_item[anchor_idx_force] = True # Update local pos_mask_item
+                        cls_targets[b, anchor_idx_force] = 1   # Update targets directly
+
+            final_pos_mask_item = (cls_targets[b, :] == 1)
+            assigned_gt_indices_for_pos_anchors = max_iou_gt_idx_per_anchor[final_pos_mask_item]
+
+            pos_anchor_indices_item = torch.where(final_pos_mask_item)[0]
+
+            if pos_anchor_indices_item.numel() > 0:
+                current_assigned_anchors = anchors[pos_anchor_indices_item]
+                current_assigned_gt_boxes = gt_boxes_item[assigned_gt_indices_for_pos_anchors]
+                current_assigned_gt_intentions = gt_intentions_item[assigned_gt_indices_for_pos_anchors]
 
                 eps = 1e-6
-                delta_x = (matched_gt_boxes[:, 0] - pos_anchors_item[:, 0]) / (pos_anchors_item[:, 2] + eps)
-                delta_y = (matched_gt_boxes[:, 1] - pos_anchors_item[:, 1]) / (pos_anchors_item[:, 3] + eps)
-                delta_w = torch.log((matched_gt_boxes[:, 2] / (pos_anchors_item[:, 2] + eps)) + eps)
-                delta_l = torch.log((matched_gt_boxes[:, 3] / (pos_anchors_item[:, 3] + eps)) + eps)
-                heading_diff = matched_gt_boxes[:, 4] - pos_anchors_item[:, 4]
-                delta_h_sin = torch.sin(heading_diff)
-                delta_h_cos = torch.cos(heading_diff)
-                
-                box_targets_encoded[b_idx, positive_anchor_indices_item, :] = torch.stack(
-                    [delta_x, delta_y, delta_w, delta_l, delta_h_sin, delta_h_cos], dim=1)
-                intention_targets[b_idx, positive_anchor_indices_item] = matched_gt_intentions
-        
-        valid_cls_mask = cls_targets >= 0
-        positive_sample_mask = cls_targets == 1
-        num_pos = positive_sample_mask.sum().clamp(min=1.0) # Use float for division
+                delta_x = (current_assigned_gt_boxes[:, 0] - current_assigned_anchors[:, 0]) / (current_assigned_anchors[:, 2] + eps)
+                delta_y = (current_assigned_gt_boxes[:, 1] - current_assigned_anchors[:, 1]) / (current_assigned_anchors[:, 3] + eps)
+                delta_w = torch.log(current_assigned_gt_boxes[:, 2] / (current_assigned_anchors[:, 2] + eps) + eps)
+                delta_l = torch.log(current_assigned_gt_boxes[:, 3] / (current_assigned_anchors[:, 3] + eps) + eps)
+                delta_h_sin = torch.sin(current_assigned_gt_boxes[:, 4] - current_assigned_anchors[:, 4])
+                delta_h_cos = torch.cos(current_assigned_gt_boxes[:, 4] - current_assigned_anchors[:, 4])
 
-        loss_cls = torch.tensor(0.0, device=device)
-        if valid_cls_mask.any():
-            loss_cls = sigmoid_focal_loss(cls_logits[valid_cls_mask], cls_targets[valid_cls_mask].float(),
-                                     alpha=self.focal_loss_alpha, gamma=self.focal_loss_gamma,
-                                     reduction="sum") / num_pos
+                box_targets[b, pos_anchor_indices_item, :] = torch.stack([delta_x, delta_y, delta_w, delta_l, delta_h_sin, delta_h_cos], dim=1)
+                intention_targets[b, pos_anchor_indices_item] = current_assigned_gt_intentions
 
-        loss_box_reg = torch.tensor(0.0, device=device)
-        if positive_sample_mask.any():
-            loss_box_reg = F.smooth_l1_loss(box_preds_rel[positive_sample_mask],
-                                        box_targets_encoded[positive_sample_mask],
-                                        beta=self.smooth_l1_beta, reduction="sum") / num_pos
-            
-        loss_intent = torch.tensor(0.0, device=device)
-        valid_intent_mask = intention_targets >= 0 # Should align with positive_sample_mask
-        if valid_intent_mask.any():
-            intent_logits_pos = intention_logits[valid_intent_mask]
-            intent_targets_pos = intention_targets[valid_intent_mask]
-            intent_loss_per_anchor = self.intention_criterion(intent_logits_pos, intent_targets_pos)
+        cls_logits_flat = cls_logits.reshape(-1, 1)
+        box_preds_flat = box_preds.reshape(-1, 6)
+        intention_logits_flat = intention_logits.reshape(-1, intention_logits.shape[-1])
 
-            if self.apply_intention_downsampling:
-                with torch.no_grad():
-                    downsample_mask = torch.ones_like(intent_targets_pos, dtype=torch.float32)
-                    for dominant_idx in self.dominant_intentions:
-                        is_dominant_mask = (intent_targets_pos == dominant_idx)
-                        if is_dominant_mask.any():
-                            rand_vals = torch.rand_like(intent_targets_pos[is_dominant_mask].float())
-                            keep_mask = rand_vals < self.intention_downsample_keep_prob
-                            downsample_mask[is_dominant_mask] = keep_mask.float()
-                
-                intent_loss_sum = (intent_loss_per_anchor * downsample_mask).sum()
-                effective_num_pos_intent = downsample_mask.sum().clamp(min=1.0)
-                loss_intent = intent_loss_sum / effective_num_pos_intent
-            else:
-                num_pos_intent = valid_intent_mask.sum().clamp(min=1.0)
-                loss_intent = intent_loss_per_anchor.sum() / num_pos_intent
-        
-        total_loss = (self.cls_focal_weight * loss_cls +
-                      self.box_reg_weight * loss_box_reg +
-                      self.intent_ce_weight * loss_intent)
+        cls_targets_flat = cls_targets.reshape(-1)
+        box_targets_flat = box_targets.reshape(-1, 6)
+        intention_targets_flat = intention_targets.reshape(-1)
 
-        if torch.isnan(total_loss):
-            print(f"NaN Loss Warning: Cls={loss_cls.item():.4f}, Box={loss_box_reg.item():.4f}, Intent={loss_intent.item():.4f}")
-            total_loss = torch.tensor(0.0, device=device, requires_grad=True) # Prevent training crash
+        valid_cls_mask_flat = cls_targets_flat >= 0
+        pos_targets_mask_flat = cls_targets_flat == 1
+        num_pos_total_batch = pos_targets_mask_flat.sum()
+
+        cls_loss = torch.tensor(0.0, device=device)
+        if valid_cls_mask_flat.any():
+            masked_cls_logits = cls_logits_flat[valid_cls_mask_flat]
+            masked_cls_targets = cls_targets_flat[valid_cls_mask_flat].float()
+
+            if masked_cls_logits.ndim > masked_cls_targets.ndim:
+                masked_cls_targets = masked_cls_targets.unsqueeze(1)
+
+            cls_loss = sigmoid_focal_loss(masked_cls_logits, masked_cls_targets,
+                                         alpha=self.focal_loss_alpha, gamma=self.focal_loss_gamma,
+                                         reduction="sum")
+            cls_loss = cls_loss / max(1, num_pos_total_batch)
+
+        box_loss = torch.tensor(0.0, device=device)
+        if num_pos_total_batch > 0:
+            masked_box_preds = box_preds_flat[pos_targets_mask_flat]
+            masked_box_targets = box_targets_flat[pos_targets_mask_flat]
+            box_loss = F.smooth_l1_loss(masked_box_preds, masked_box_targets,
+                                        beta=self.smooth_l1_beta, reduction="sum")
+            box_loss = box_loss / max(1, num_pos_total_batch)
+
+        intent_loss = torch.tensor(0.0, device=device)
+        if num_pos_total_batch > 0:
+            intent_logits_pos = intention_logits_flat[pos_targets_mask_flat]
+            intent_targets_pos = intention_targets_flat[pos_targets_mask_flat]
+
+            if intent_targets_pos.numel() > 0:
+                intent_loss_per_anchor = self.intention_criterion(intent_logits_pos, intent_targets_pos)
+
+                if self.apply_intention_downsampling:
+                    with torch.no_grad():
+                        downsample_mask = torch.ones_like(intent_targets_pos, dtype=torch.float32)
+                        for dominant_idx in self.dominant_intentions:
+                            is_dominant_target_mask = (intent_targets_pos == dominant_idx)
+                            if is_dominant_target_mask.any():
+                                num_dominant_samples = is_dominant_target_mask.sum().item() # Ensure scalar for torch.rand
+                                random_numbers_for_dominant = torch.rand(num_dominant_samples, device=device)
+                                keep_mask_for_dominant = random_numbers_for_dominant < self.intention_downsample_keep_prob
+                                downsample_mask[is_dominant_target_mask] = keep_mask_for_dominant.float()
+
+                    intent_loss = (intent_loss_per_anchor * downsample_mask).sum()
+                    effective_num_pos_intent = downsample_mask.sum()
+                    intent_loss = intent_loss / max(1, effective_num_pos_intent)
+                else:
+                    intent_loss = intent_loss_per_anchor.sum() / max(1, intent_targets_pos.numel())
+
+        total_loss = (self.cls_weight * cls_loss +
+                      self.box_weight * box_loss +
+                      self.intent_weight * intent_loss)
+
+        if torch.isnan(total_loss).any() or torch.isinf(total_loss).any():
+             print(f"NaN or Inf DETECTED IN LOSS! Cls: {cls_loss.item()}, Box: {box_loss.item()}, Intent: {intent_loss.item()}")
+             return {
+                "loss": torch.tensor(0.0, device=device, requires_grad=True),
+                "cls_loss": torch.tensor(0.0, device=device),
+                "box_loss": torch.tensor(0.0, device=device),
+                "intent_loss": torch.tensor(0.0, device=device),
+                "num_pos_anchors": num_pos_total_batch.item() # Ensure scalar
+            }
 
         return {
             "loss": total_loss,
-            "cls_loss": loss_cls.detach(), "box_loss": loss_box_reg.detach(),
-            "intent_loss": loss_intent.detach(), "num_pos_anchors": positive_sample_mask.sum()
+            "cls_loss": cls_loss.detach(),
+            "box_loss": box_loss.detach(),
+            "intent_loss": intent_loss.detach(),
+            "num_pos_anchors": num_pos_total_batch.item() # Ensure scalar
         }
