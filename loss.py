@@ -20,8 +20,8 @@ class DetectionIntentionLoss(nn.Module):
                  focal_loss_gamma=2.0,
                  smooth_l1_beta=1.0 / 9.0,
                  apply_intention_downsampling=True,
-                 dominant_intentions=DOMINANT_INTENTION_CLASSES_PAPER,
-                 intention_downsample_ratio=INTENTION_DOWNSAMPLE_RATIO_PAPER
+                 dominant_intentions=DOMINANT_CLASSES_FOR_DOWNSAMPLING,
+                 intention_downsample_ratio=INTENTION_DOWNSAMPLE_RATIO
                  ):
         super().__init__()
         self.iou_threshold = iou_threshold
