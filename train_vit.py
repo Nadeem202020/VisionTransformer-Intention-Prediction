@@ -41,8 +41,8 @@ if __name__ == '__main__':
     VIT_BACKBONE_CFG = {
         'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
         'map_input_channels': MAP_CHANNELS,
-        'vit_model_name_lidar': 'vit_small_patch16_224', # Or 'vit_tiny_patch16_224' for faster testing
-        'vit_model_name_map': 'vit_small_patch16_224',   # Or 'vit_tiny_patch16_224'
+        'vit_model_name_lidar': 'vit_small_patch16_224', 
+        'vit_model_name_map': 'vit_small_patch16_224',   
         'pretrained_lidar': False, # Set to True to use timm's pretrained weights (if available and compatible)
         'pretrained_map': False,
         'img_size': VIT_IMG_SIZE, # Crucial: must match input tensor size to ViT
