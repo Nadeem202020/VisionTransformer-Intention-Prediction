@@ -12,7 +12,7 @@ def get_vehicle_intention_heuristic_enhanced(
     track_id: str,
     current_ts_ns: int,
     all_log_gt_boxes_df: pd.DataFrame,
-    static_map, # Should be type hinted: ArgoverseStaticMap | None
+    static_map: ArgoverseStaticMap | None, 
     horizon_steps: int = INTENTION_HORIZON_STEPS,
     min_future_points: int = 5,
     stopped_speed_thresh: float = MIN_SPEED_STOPPED,

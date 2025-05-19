@@ -169,7 +169,7 @@ class IntentNetViT(nn.Module):
         self.det_head = DetectionHead(in_channels=feature_channels, **head_cfg)
         self.intention_head = IntentionHead(in_channels=feature_channels, num_classes=NUM_INTENTION_CLASSES, **head_cfg)
         
-        print(f"IntentNetViTWithFusion Heads Initialized. Input Channels: {feature_channels}")
+        print(f"IntentNetViT Heads Initialized. Input Channels: {feature_channels}")
         # Calculate and print the effective stride for the heads
         # Assuming patch size is in the name like '..._patch16_...'
         try:
@@ -186,6 +186,6 @@ class IntentNetViT(nn.Module):
         features = self.backbone(lidar_bev, map_bev)
         det_cls_logits, det_box_preds_rel = self.det_head(features); intention_logits = self.intention_head(features)
         B = features.shape[0]
-        det_cls_logits = det_cls_logits.reshape(B, -1); det_box_preds_rel = det_box_preds_rel.reshape(B, -1, 6)
+        det_cls_logits = det_cls_logits.reshape(B, -1, 1); det_box_preds_rel = det_box_preds_rel.reshape(B, -1, 6)
         intention_logits = intention_logits.reshape(B, -1, NUM_INTENTION_CLASSES)
         return det_cls_logits, det_box_preds_rel, intention_logits

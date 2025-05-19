@@ -11,7 +11,13 @@ import json
 
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, VOXEL_SIZE_M, BEV_PIXEL_OFFSET_X,
                        BEV_PIXEL_OFFSET_Y, Z_MIN, Z_MAX, LIDAR_HEIGHT_CHANNELS, LIDAR_SWEEPS,
-                       MAP_CHANNELS, ANCHOR_CONFIGS_PAPER, INTENTIONS_MAP, VEHICLE_CATEGORIES)
+                       MAP_CHANNELS, ANCHOR_CONFIGS_PAPER, INTENTIONS_MAP, VEHICLE_CATEGORIES, SHAPELY_AVAILABLE)
+
+try:
+    from shapely.geometry import Polygon
+    _LOCAL_SHAPELY_POLYGON_AVAILABLE = True
+except ImportError:
+    _LOCAL_SHAPELY_POLYGON_AVAILABLE = False
 
 # --- Data Loading and Transformation Utilities ---
 def load_ego_poses(log_dir: str | Path) -> pd.DataFrame:
@@ -292,6 +298,7 @@ def apply_nms(boxes_xywha: torch.Tensor, scores: torch.Tensor, iou_threshold: fl
 
 # --- IoU Calculation ---
 def compute_axis_aligned_iou(boxes1_xywh: torch.Tensor, boxes2_xywh: torch.Tensor) -> torch.Tensor:
+    # ... (no change to this function) ...
     """Computes axis-aligned IoU between two sets of boxes (cx, cy, w, h)."""
     def to_corners(b: torch.Tensor) -> torch.Tensor: # (cx, cy, w, h) -> (x1, y1, x2, y2)
         x1, y1 = b[:, 0] - b[:, 2] / 2, b[:, 1] - b[:, 3] / 2
@@ -311,11 +318,124 @@ def compute_axis_aligned_iou(boxes1_xywh: torch.Tensor, boxes2_xywh: torch.Tenso
     union_area = area1[:, None] + area2[None, :] - inter_area
     return inter_area / (union_area + 1e-7) # Add epsilon for stability
 
+
+def _xywha_to_shapely_polygon(box_xywha: np.ndarray) -> Polygon | None:
+    """
+    Converts a single (cx, cy, w, l, angle_rad) box to a Shapely Polygon.
+
+    Angle Convention:
+    - `cx`, `cy`: Center of the box.
+    - `w`: Width of the box (dimension perpendicular to the angle_rad).
+    - `l`: Length of the box (dimension aligned with the angle_rad).
+    - `angle_rad`: Yaw angle in radians. This angle defines the orientation of the
+                   LENGTH `l` of the box. A 0 radian angle means the length `l`
+                   is aligned with the positive X-axis of the coordinate system
+                   the box is defined in (e.g., ego-centric X-axis).
+                   Positive angle is counter-clockwise.
+    The local coordinate system of the unrotated box has its length `l` along the
+    local y-axis and width `w` along the local x-axis. This system is then
+    rotated by `angle_rad`.
+    """
+    if not _LOCAL_SHAPELY_POLYGON_AVAILABLE: # Use local flag for this helper
+        # This message should ideally not appear if constants.SHAPELY_AVAILABLE is False,
+        # as compute_rotated_iou would fallback first.
+        # print("Error: _xywha_to_shapely_polygon called but Shapely Polygon class not available locally.")
+        return None
+        
+    cx, cy, w, l, angle_rad = box_xywha
+    
+    hw, hl = w / 2.0, l / 2.0
+    
+    # Corners in the box's local frame (origin at center, unrotated)
+    # Width `w` is along the local x-axis.
+    # Length `l` is along the local y-axis.
+    # This local y-axis will be rotated by angle_rad to become the box's primary orientation.
+    local_corners = np.array([
+        [-hw, -hl],  # e.g., back-left if looking along local y (length)
+        [ hw, -hl],  # e.g., back-right
+        [ hw,  hl],  # e.g., front-right
+        [-hw,  hl]   # e.g., front-left
+    ])
+    
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    R_matrix = np.array([
+        [cos_a, -sin_a],
+        [sin_a,  cos_a]
+    ])
+    
+    rotated_corners = local_corners @ R_matrix.T
+    global_corners = rotated_corners + np.array([cx, cy])
+    
+    try:
+        poly = Polygon(global_corners)
+        # It's good practice to check if the polygon is valid, though Shapely often handles simple cases.
+        # A zero-area polygon is valid but will result in 0 IoU unless both are zero-area and identical.
+        if not poly.is_valid:
+            # print(f"Warning: Created invalid Shapely Polygon for box {box_xywha}. Attempting buffer(0).")
+            poly = poly.buffer(0) # Try to fix invalid polygon (e.g. self-intersection)
+        return poly
+    except Exception as e:
+        # print(f"Warning: Could not form Shapely Polygon for box {box_xywha}: {e}")
+        return Polygon() # Return an empty polygon, which has area 0
+
+
 def compute_rotated_iou(boxes1_xywha: torch.Tensor, boxes2_xywha: torch.Tensor) -> torch.Tensor:
-    """Placeholder for rotated IoU. Currently uses axis-aligned IoU as an approximation."""
-    # For a true rotated IoU, a more complex geometric calculation (e.g., Sutherland-Hodgman)
-    # or a library supporting it would be needed.
-    return compute_axis_aligned_iou(boxes1_xywha[:, :4], boxes2_xywha[:, :4])
+    """
+    Computes rotated IoU between two sets of boxes (cx, cy, w, l, angle_rad) using Shapely.
+    `boxes1_xywha`: Tensor of shape [M, 5]
+    `boxes2_xywha`: Tensor of shape [N, 5]
+    Returns:
+        iou_matrix: Tensor of shape [M, N]
+    """
+    # Use the globally defined SHAPELY_AVAILABLE from constants.py
+    if not SHAPELY_AVAILABLE:
+        print("Warning: compute_rotated_iou called, but Shapely is not available (checked via constants.SHAPELY_AVAILABLE). Falling back to axis-aligned IoU.")
+        return compute_axis_aligned_iou(boxes1_xywha[:, :4], boxes2_xywha[:, :4])
+
+    np_boxes1 = boxes1_xywha.detach().cpu().numpy()
+    np_boxes2 = boxes2_xywha.detach().cpu().numpy()
+
+    num_boxes1 = np_boxes1.shape[0]
+    num_boxes2 = np_boxes2.shape[0]
+    iou_matrix = np.zeros((num_boxes1, num_boxes2), dtype=np.float32)
+
+    if num_boxes1 == 0 or num_boxes2 == 0:
+        return torch.from_numpy(iou_matrix).to(boxes1_xywha.device)
+
+    polys1 = [_xywha_to_shapely_polygon(box) for box in np_boxes1]
+    polys2 = [_xywha_to_shapely_polygon(box) for box in np_boxes2]
+    
+    areas1 = np.array([p.area if p and p.is_valid else 0 for p in polys1])
+    areas2 = np.array([p.area if p and p.is_valid else 0 for p in polys2])
+
+    for i in range(num_boxes1):
+        if polys1[i] is None or not polys1[i].is_valid or areas1[i] < 1e-6:
+            continue
+        for j in range(num_boxes2):
+            if polys2[j] is None or not polys2[j].is_valid or areas2[j] < 1e-6:
+                continue
+
+            try:
+                # Ensure polygons are valid before intersection, buffer(0) can sometimes fix minor issues.
+                # This is already partly handled in _xywha_to_shapely_polygon
+                poly_i = polys1[i] # if polys1[i].is_valid else polys1[i].buffer(0)
+                poly_j = polys2[j] # if polys2[j].is_valid else polys2[j].buffer(0)
+
+                # Check again after potential buffer(0) if you add it above
+                # if not poly_i.is_valid or not poly_j.is_valid: continue
+
+                intersection_area = poly_i.intersection(poly_j).area
+                if intersection_area > 1e-7: # Use a slightly larger epsilon for intersection
+                    union_area = areas1[i] + areas2[j] - intersection_area
+                    if union_area > 1e-6:
+                        iou_matrix[i, j] = intersection_area / union_area
+                    # else: iou_matrix[i, j] = 0.0 # Union is too small
+                # else: iou_matrix[i, j] = 0.0 # Intersection is too small
+            except Exception as e:
+                # print(f"Error during Shapely intersection/area for boxes {i} and {j}: {e}")
+                iou_matrix[i, j] = 0.0
+
+    return torch.from_numpy(iou_matrix).to(boxes1_xywha.device)
 
 # --- Data Augmentation Functions ---
 def random_flip_bev(lidar_bev: np.ndarray, map_bev: np.ndarray,

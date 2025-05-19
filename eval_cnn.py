@@ -10,15 +10,16 @@ from pathlib import Path
 # import os # Not directly used
 # import traceback # Typically for debugging, can be removed for cleaner script
 import torchvision # For torchvision.ops.nms
+from torch.utils.data import DataLoader
 
 # Project-specific imports (assuming all .py files are in the same root directory)
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES,
                        ANCHOR_CONFIGS_PAPER, AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        INTENTIONS_MAP_REV, LIDAR_TOTAL_CHANNELS, MAP_CHANNELS) # Added missing constants
 from dataset import ArgoverseIntentNetDataset, collate_fn
-from model_cnn import IntentNetDetectorIntention, BasicBlock, Backbone # For CNN eval
+from model_cnn import IntentNetCNN, BasicBlock # For CNN eval
 # from model_vit import IntentNetDetectorIntentionTwoStreamViT # For ViT eval (in eval_vit.py)
-from utils import generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou, calculate_ap
+from utils import (generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou, compute_rotated_iou, calculate_ap)
 
 # --- Script Configuration ---
 # USER_CONFIG: Update these paths as necessary
@@ -33,6 +34,7 @@ NUM_WORKERS_EVAL = 0     # For DataLoader
 DETECTION_IOU_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9] # For mAP calculation
 IOU_THRESHOLD_FOR_INTENTION_MATCH = 0.5             # For matching detections to GT for intention eval
 FEATURE_MAP_STRIDE_CNN = 8                          # Specific to CNN architecture
+EVAL_USE_ROTATED_IOU = False # Default to False (axis-aligned)
 
 # Runtime Device Setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -43,10 +45,14 @@ def main_eval_cnn():
     print(f"Torch CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"Torch CUDA version: {torch.version.cuda}")
-    # print(f"timm version: {timm.__version__}") # Not needed for CNN eval
     print(f"AV2 Map API Available: {AV2_MAP_AVAILABLE}")
     print(f"Shapely Available: {SHAPELY_AVAILABLE}")
     print(f"Using device for CNN evaluation: {DEVICE}")
+    print(f"Evaluation using Rotated IoU for mAP/matching: {EVAL_USE_ROTATED_IOU} "
+          f"(Requires Shapely if True)")
+    if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+        print("WARNING: EVAL_USE_ROTATED_IOU is True, but Shapely is not available. "
+              "Falling back to axis-aligned IoU.")
 
     # --- Validate Data Path ---
     val_data_path = Path(VAL_DATA_DIR)
@@ -82,7 +88,7 @@ def main_eval_cnn():
         }
 
     try:
-        model_to_evaluate_cnn = IntentNetDetectorIntention(backbone_cfg=loaded_cnn_backbone_cfg).to(DEVICE)
+        model_to_evaluate_cnn = IntentNetCNN(backbone_cfg=loaded_cnn_backbone_cfg).to(DEVICE)
         print("CNN Model structure instantiated successfully.")
     except Exception as e:
         print(f"ERROR: Failed to instantiate CNN model: {e}")

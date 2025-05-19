@@ -11,7 +11,7 @@ from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES, ANC
                        AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO)
 from dataset import ArgoverseIntentNetDataset, collate_fn
-from model_vit import IntentNetViT # Renamed model
+from model_vit import IntentNetViT, BasicBlock # Renamed model
 from loss import DetectionIntentionLoss
 from utils import generate_anchors
 
@@ -36,31 +36,41 @@ if __name__ == '__main__':
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ViT Backbone Specific Configuration
-    # These match your successful training run
-    TWO_STREAM_VIT_BACKBONE_CFG = {
-        'vit_model_name_lidar': 'vit_small_patch16_224',
-        'vit_model_name_map': 'vit_tiny_patch16_224',
-        'pretrained_lidar': False, # As per your training log
-        'pretrained_map': False,   # As per your training log
-        'img_size': (GRID_HEIGHT_PX, GRID_WIDTH_PX), # From constants
+    VIT_IMG_SIZE = (GRID_HEIGHT_PX, GRID_WIDTH_PX) # e.g., (224,224) or (720,400)
+
+    VIT_BACKBONE_CFG = {
+        'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
+        'map_input_channels': MAP_CHANNELS,
+        'vit_model_name_lidar': 'vit_small_patch16_224', # Or 'vit_tiny_patch16_224' for faster testing
+        'vit_model_name_map': 'vit_small_patch16_224',   # Or 'vit_tiny_patch16_224'
+        'pretrained_lidar': False, # Set to True to use timm's pretrained weights (if available and compatible)
+        'pretrained_map': False,
+        'img_size': VIT_IMG_SIZE, # Crucial: must match input tensor size to ViT
         'drop_path_rate_lidar': 0.1,
         'drop_path_rate_map': 0.1,
-        'lidar_adapter_out_channels': 192, # From your training log
-        'map_adapter_out_channels': 128    # From your training log
+        'lidar_adapter_out_channels': 192, # ViT Small embed_dim is 384, Tiny is 192. Adapter can change this.
+        'map_adapter_out_channels': 192,   # This example uses 192, adjust based on your ViT and adapter.
+        'fusion_block_planes': 512,        # Channels after fusion ResBlocks
+        'fusion_block_layers': 2,          # Number of ResBlocks in fusion
+        'fusion_block_kernel_size': 3,
+        'fusion_block_stride': 1,          # Keep 1 if ViT patch already gives 16x, or 2 for 32x total
+        'res_block_type': BasicBlock
     }
     try:
-        # Infer stride from patch size in model name
-        FEATURE_MAP_STRIDE_VIT = int(TWO_STREAM_VIT_BACKBONE_CFG['vit_model_name_lidar'].split('_patch')[-1].split('_')[0])
-    except Exception: # pylint: disable=broad-except
-        print("Warning: Could not automatically determine ViT feature map stride. Defaulting to 16.")
-        FEATURE_MAP_STRIDE_VIT = 16
+        # Assumes vit_model_name_lidar is like '..._patch<N>_...'
+        vit_patch_stride_val = int(VIT_BACKBONE_CFG['vit_model_name_lidar'].split('_patch')[-1].split('_')[0])
+    except ValueError:
+        vit_patch_stride_val = 16 # Default if parsing fails
+        print(f"Warning: Could not parse patch stride from ViT name, defaulting to {vit_patch_stride_val}.")
+    FEATURE_MAP_STRIDE_VIT = vit_patch_stride_val * VIT_BACKBONE_CFG.get('fusion_block_stride', 1)
 
     print(f"--- ViT Training Configuration ---")
     print(f"Device: {DEVICE}")
     print(f"Training Data Directory: {TRAIN_DATA_DIR}")
     # print(f"AV2 Map API Available: {AV2_MAP_AVAILABLE}") # Printed by constants.py
     # print(f"Shapely Available: {SHAPELY_AVAILABLE}")   # Printed by constants.py
+    print(f"BEV Image Size for ViT: {VIT_IMG_SIZE}")
+    print(f"Using Rotated IoU: {USE_ROTATED_IOU}")
     print(f"Batch Size: {TRAIN_BATCH_SIZE}, Num Epochs: {NUM_EPOCHS}, LR: {LEARNING_RATE}")
     print(f"Feature Map Stride (ViT): {FEATURE_MAP_STRIDE_VIT}")
     print(f"Apply Intention Downsampling: {APPLY_INTENTION_DOWNSAMPLING}")
@@ -122,7 +132,7 @@ if __name__ == '__main__':
 
     # --- Initialize Model, Loss, Optimizer ---
     print("\nInitializing ViT Model, Loss Function, and Optimizer...")
-    model = IntentNetViT(backbone_cfg=TWO_STREAM_VIT_BACKBONE_CFG).to(DEVICE) # Use renamed class
+    model = IntentNetViT(backbone_cfg=VIT_BACKBONE_CFG).to(DEVICE) # Use renamed class
 
     loss_cfg_weights = intention_weights_tensor if USE_INTENTION_WEIGHTS and not APPLY_INTENTION_DOWNSAMPLING else None
     loss_fn = DetectionIntentionLoss(
@@ -217,6 +227,6 @@ if __name__ == '__main__':
     'epoch': NUM_EPOCHS, 
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': optimizer.state_dict(), 
-    'backbone_cfg': TWO_STREAM_VIT_BACKBONE_CFG, }, 
+    'backbone_cfg': VIT_BACKBONE_CFG, }, 
     final_model_path) 
     print(f"Saved final TRAINED ViT model to {final_model_path}")

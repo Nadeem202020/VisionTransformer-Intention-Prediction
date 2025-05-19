@@ -41,7 +41,7 @@ BEV_Y_MIN, BEV_Y_MAX = -Y_RANGE_M / 2.0, Y_RANGE_M / 2.0
 
 # Pixel offsets for converting ego-coordinates to BEV pixel coordinates
 BEV_PIXEL_OFFSET_X = GRID_WIDTH_PX / 2.0  # Offset for ego Y-coord to pixel X-coord
-BEV_PIXEL_OFFSET_Y = GRID_HEIGHT_PX / 4.0 # Offset for ego X-coord to pixel Y-coord (accounts for forward shift)
+BEV_PIXEL_OFFSET_Y = GRID_HEIGHT_PX * 3.0 / 4.0 
 
 # LiDAR point cloud Z-axis filtering and height channel discretization
 Z_MIN, Z_MAX = -2.0, 3.8                  # Min/Max Z value (meters) for points to be included in BEV

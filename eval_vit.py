@@ -9,6 +9,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from pathlib import Path
 import timm # For timm version print, and potentially if backbone_cfg needs it
 import torchvision # For torchvision.ops.nms
+from torch.utils.data import DataLoader
 
 # Project-specific imports (assuming all .py files are in the same root directory)
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES, ANCHOR_CONFIGS_PAPER,
@@ -116,18 +117,22 @@ def main_eval_vit():
         return
 
     print("\nGenerating Anchors for ViT...")
+    vit_model_name_for_stride = loaded_vit_backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch16_224')
     try:
-        vit_model_name_for_stride = loaded_vit_backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch16_224')
-        eval_vit_fm_stride = int(vit_model_name_for_stride.split('_patch')[-1].split('_')[0])
-        print(f"Using feature_map_stride = {eval_vit_fm_stride} for ViT anchor generation (from loaded config).")
+        vit_patch_stride = int(vit_model_name_for_stride.split('_patch')[-1].split('_')[0])
+    except ValueError:
+        vit_patch_stride = 16 # Default fallback
+    fusion_block_stride_from_cfg = loaded_vit_backbone_cfg.get('fusion_block_stride', 1) # Default from training
+    actual_feature_map_stride_vit = vit_patch_stride * fusion_block_stride_from_cfg
+    print(f"Using feature_map_stride = {actual_feature_map_stride_vit} for ViT anchor generation (ViT patch: {vit_patch_stride}, Fusion stride: {fusion_block_stride_from_cfg}).")
 
         anchors_for_vit_eval = generate_anchors(
             bev_height=GRID_HEIGHT_PX,
             bev_width=GRID_WIDTH_PX,
-            feature_map_stride=eval_vit_fm_stride,
+            feature_map_stride=actual_feature_map_stride_vit,
             anchor_configs=ANCHOR_CONFIGS_PAPER
         ).to(DEVICE)
-        print(f"Anchors for ViT evaluation generated (stride {eval_vit_fm_stride}), shape: {anchors_for_vit_eval.shape}")
+        print(f"Anchors for ViT evaluation generated (stride {actual_feature_map_stride_vit}), shape: {anchors_for_vit_eval.shape}")
     except Exception as e_anchors:
         print(f"ERROR generating anchors for ViT: {e_anchors}")
         return
