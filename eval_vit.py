@@ -42,12 +42,19 @@ def main_eval_vit():
     print(f"Torch version: {torch.__version__}, CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"Torch CUDA version: {torch.version.cuda}")
-    if hasattr(timm, '__version__'): # Check if timm has __version__
+    if hasattr(timm, '__version__'):
         print(f"timm version: {timm.__version__}")
     print(f"Using device: {DEVICE}")
     print(f"AV2 Map API Available: {AV2_MAP_AVAILABLE}")
     print(f"Shapely Available: {SHAPELY_AVAILABLE}")
+    print(f"Evaluation using Rotated IoU for mAP/matching: {EVAL_USE_ROTATED_IOU} "
+          f"(Requires Shapely if True)")
+    if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+        print("WARNING: EVAL_USE_ROTATED_IOU is True, but Shapely is not available. "
+              "Falling back to axis-aligned IoU.")
 
+
+    # ... (Validate Data Path - no change) ...
     val_data_path = Path(VAL_DATA_DIR)
     if not val_data_path.is_dir():
         print(f"ERROR: Evaluation data directory not found: {VAL_DATA_DIR}")
@@ -61,6 +68,7 @@ def main_eval_vit():
         return
 
     # --- Load Trained ViT Model ---
+    # ... (no change in loading logic, ensure defaults are set for backbone_cfg) ...
     print(f"\nLoading TRAINED ViT Model from: {MODEL_SAVE_PATH_VIT}")
     try:
         checkpoint_vit = torch.load(MODEL_SAVE_PATH_VIT, map_location=DEVICE)
@@ -75,20 +83,17 @@ def main_eval_vit():
         return
 
     try:
-        # Ensure 'img_size' is in the loaded config for TwoStreamViTBackbone
         loaded_vit_backbone_cfg.setdefault('img_size', (GRID_HEIGHT_PX, GRID_WIDTH_PX))
-        # Set other defaults if they might be missing and are critical for TwoStreamViTBackbone
         loaded_vit_backbone_cfg.setdefault('lidar_input_channels', LIDAR_TOTAL_CHANNELS)
         loaded_vit_backbone_cfg.setdefault('map_input_channels', MAP_CHANNELS)
-        loaded_vit_backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch16_224') # Match training
-        loaded_vit_backbone_cfg.setdefault('vit_model_name_map', 'vit_tiny_patch16_224')   # Match training
-        loaded_vit_backbone_cfg.setdefault('pretrained_lidar', False) # Match training
-        loaded_vit_backbone_cfg.setdefault('pretrained_map', False)   # Match training
+        loaded_vit_backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch16_224')
+        loaded_vit_backbone_cfg.setdefault('vit_model_name_map', 'vit_tiny_patch16_224') # Original IntentNet uses tiny for map
+        loaded_vit_backbone_cfg.setdefault('pretrained_lidar', False)
+        loaded_vit_backbone_cfg.setdefault('pretrained_map', False)
         loaded_vit_backbone_cfg.setdefault('drop_path_rate_lidar', 0.1)
         loaded_vit_backbone_cfg.setdefault('drop_path_rate_map', 0.1)
-        loaded_vit_backbone_cfg.setdefault('lidar_adapter_out_channels', 192) # Match training
-        loaded_vit_backbone_cfg.setdefault('map_adapter_out_channels', 128)   # Match training
-
+        loaded_vit_backbone_cfg.setdefault('lidar_adapter_out_channels', 192)
+        loaded_vit_backbone_cfg.setdefault('map_adapter_out_channels', 128) # Original IntentNet uses 128 for map ViT adapter
 
         model_to_evaluate_vit = IntentNetViT(backbone_cfg=loaded_vit_backbone_cfg).to(DEVICE)
         print("ViT Model structure instantiated successfully using loaded configuration.")
@@ -100,7 +105,9 @@ def main_eval_vit():
         return
     print("--------------------")
 
+
     # --- Prepare DataLoader and Anchors ---
+    # ... (no change in DataLoader logic) ...
     print("\nPreparing Evaluation DataLoader...")
     try:
         eval_dataset_vit = ArgoverseIntentNetDataset(data_dir=VAL_DATA_DIR, is_train=False)
@@ -117,28 +124,33 @@ def main_eval_vit():
         return
 
     print("\nGenerating Anchors for ViT...")
+    # Corrected anchor stride calculation
     vit_model_name_for_stride = loaded_vit_backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch16_224')
     try:
         vit_patch_stride = int(vit_model_name_for_stride.split('_patch')[-1].split('_')[0])
     except ValueError:
-        vit_patch_stride = 16 # Default fallback
-    fusion_block_stride_from_cfg = loaded_vit_backbone_cfg.get('fusion_block_stride', 1) # Default from training
+        vit_patch_stride = 16
+    fusion_block_stride_from_cfg = loaded_vit_backbone_cfg.get('fusion_block_stride', 1)
     actual_feature_map_stride_vit = vit_patch_stride * fusion_block_stride_from_cfg
     print(f"Using feature_map_stride = {actual_feature_map_stride_vit} for ViT anchor generation (ViT patch: {vit_patch_stride}, Fusion stride: {fusion_block_stride_from_cfg}).")
 
+    try:
         anchors_for_vit_eval = generate_anchors(
             bev_height=GRID_HEIGHT_PX,
             bev_width=GRID_WIDTH_PX,
-            feature_map_stride=actual_feature_map_stride_vit,
+            feature_map_stride=actual_feature_map_stride_vit, # Use corrected stride
             anchor_configs=ANCHOR_CONFIGS_PAPER
         ).to(DEVICE)
+        # Corrected print statement for anchor shape
         print(f"Anchors for ViT evaluation generated (stride {actual_feature_map_stride_vit}), shape: {anchors_for_vit_eval.shape}")
     except Exception as e_anchors:
         print(f"ERROR generating anchors for ViT: {e_anchors}")
         return
     print("--------------------")
 
+
     # --- Run Inference ---
+    # ... (no change in inference loop) ...
     print("\nRunning Inference with ViT Model...")
     all_sample_results_vit = []
     with torch.inference_mode():
@@ -160,17 +172,24 @@ def main_eval_vit():
                         'pred_intentions': torch.empty(0, dtype=torch.long, device='cpu')
                     }
                     try:
-                        cls_logits_sample = det_cls_logits[b_idx]
+                        cls_logits_sample = det_cls_logits[b_idx] # Should be [NumAnchors, 1]
                         box_preds_rel_sample = det_box_preds_rel[b_idx]
-                        int_logits_sample = intent_logits[b_idx]
-                        scores_sample = torch.sigmoid(cls_logits_sample)
+                        # int_logits_sample needs to be reshaped if not already [NumAnchors, NumClasses]
+                        # In model_vit.py, intent_logits is reshaped to (B, -1, NUM_INTENTION_CLASSES)
+                        # So, intent_logits[b_idx] is already [NumAnchors, NumClasses]
+                        int_logits_sample = intent_logits[b_idx] 
+                        scores_sample = torch.sigmoid(cls_logits_sample) # Sigmoid for objectness
+                        
+                        # Flatten scores if they are not already [NumAnchors]
+                        if scores_sample.ndim > 1:
+                            scores_sample = scores_sample.squeeze(-1)
 
                         keep_conf_indices = torch.where(scores_sample >= CONFIDENCE_THRESHOLD)[0]
                         if keep_conf_indices.numel() > 0:
                             scores_filtered = scores_sample[keep_conf_indices]
                             anchors_filtered = anchors_for_vit_eval[keep_conf_indices]
                             box_preds_rel_filtered = box_preds_rel_sample[keep_conf_indices]
-                            int_logits_filtered = int_logits_sample[keep_conf_indices]
+                            int_logits_filtered = int_logits_sample[keep_conf_indices] # Already correct shape
 
                             boxes_decoded_abs = decode_box_predictions(box_preds_rel_filtered, anchors_filtered)
                             nms_keep_indices = apply_nms(boxes_decoded_abs, scores_filtered, NMS_IOU_THRESHOLD)
@@ -192,12 +211,19 @@ def main_eval_vit():
                 print(f"ERROR processing ViT evaluation batch: {e_batch}")
     print(f"Collected results for {len(all_sample_results_vit)} samples.")
 
+
     # --- Detection Evaluation (mAP) ---
     print("\n--- Calculating Detection mAP (ViT Model) ---")
     average_precisions_per_iou_vit = {iou_thresh: [] for iou_thresh in DETECTION_IOU_THRESHOLDS}
     if not all_sample_results_vit:
         print("WARNING: No sample results to calculate mAP for ViT.")
     else:
+        # Determine which IoU function to use
+        iou_func_for_eval = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
+        if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+             iou_func_for_eval = compute_axis_aligned_iou # Fallback
+        print(f"  Using IoU function for mAP: {iou_func_for_eval.__name__}")
+
         for sample_result in tqdm(all_sample_results_vit, desc="Calculating AP per sample (ViT)", unit="sample"):
             pred_scores = sample_result['pred_scores']
             pred_boxes = sample_result['pred_boxes_xywha']
@@ -216,31 +242,37 @@ def main_eval_vit():
                 sort_idx = torch.argsort(pred_scores, descending=True)
                 pred_boxes_sorted = pred_boxes[sort_idx]
 
-                iou_matrix = compute_axis_aligned_iou(pred_boxes_sorted[:, :4].float(), gt_boxes[:, :4].float())
-                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=DEVICE)
-                tp_flags = torch.zeros(num_pred, dtype=torch.bool, device=DEVICE) 
+                if iou_func_for_eval == compute_rotated_iou:
+                    iou_matrix = iou_func_for_eval(pred_boxes_sorted.float(), gt_boxes.float())
+                else:
+                    iou_matrix = iou_func_for_eval(pred_boxes_sorted[:, :4].float(), gt_boxes[:, :4].float())
+                
+                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu')
+                tp_flags = torch.zeros(num_pred, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu')
 
-                for pred_idx_sorted in range(num_pred): # Iterate over sorted predictions
+                for pred_idx_sorted in range(num_pred):
                     pred_ious_with_gts = iou_matrix[pred_idx_sorted, :]
                     if pred_ious_with_gts.numel() == 0: continue
                     best_iou_for_pred, best_gt_idx_for_pred = torch.max(pred_ious_with_gts, dim=0)
 
                     if best_iou_for_pred >= iou_thresh_eval:
                         if not gt_matched_flags[best_gt_idx_for_pred]:
-                            tp_flags[pred_idx_sorted] = True # Mark this sorted prediction as TP
+                            tp_flags[pred_idx_sorted] = True
                             gt_matched_flags[best_gt_idx_for_pred] = True
                 
                 tp_cumsum = torch.cumsum(tp_flags.float(), dim=0)
                 recall_steps = tp_cumsum / (num_gt + 1e-9)
-                precision_steps = tp_cumsum / (torch.arange(1, num_pred + 1, device=tp_flags.device).float() + 1e-9) # Denominator is num_pred_so_far
+                precision_steps = tp_cumsum / (torch.arange(1, num_pred + 1, device=tp_flags.device).float() + 1e-9)
 
                 ap = calculate_ap(recall_steps.cpu().numpy(), precision_steps.cpu().numpy())
                 average_precisions_per_iou_vit[iou_thresh_eval].append(ap)
 
+    # ... (Rest of mAP printing - no change) ...
     print("\n--- ViT Detection Results (mAP) ---")
     for iou_thresh_eval, ap_list in average_precisions_per_iou_vit.items():
         mean_ap_vit = np.mean(ap_list) if ap_list else 0.0
         print(f"ViT mAP @ IoU={iou_thresh_eval:.1f}: {mean_ap_vit:.4f}")
+
 
     # --- Intention Prediction Evaluation ---
     print("\n--- Calculating Intention Prediction Metrics (ViT Model) ---")
@@ -249,6 +281,11 @@ def main_eval_vit():
     if not all_sample_results_vit:
         print("WARNING: No sample results to calculate intention metrics for ViT.")
     else:
+        iou_func_for_matching = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
+        if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+             iou_func_for_matching = compute_axis_aligned_iou # Fallback
+        print(f"  Using IoU function for intention matching: {iou_func_for_matching.__name__}")
+
         for sample_result in tqdm(all_sample_results_vit, desc="Matching for Intention Eval (ViT)", unit="sample"):
             pred_scores = sample_result['pred_scores']
             pred_boxes = sample_result['pred_boxes_xywha']
@@ -261,14 +298,16 @@ def main_eval_vit():
             if num_gt == 0 or num_pred_after_nms == 0:
                 continue
 
-            iou_matrix_intent = compute_axis_aligned_iou(pred_boxes[:, :4].float(), gt_boxes[:, :4].float())
-            gt_matched_for_intent = torch.zeros(num_gt, dtype=torch.bool)
+            if iou_func_for_matching == compute_rotated_iou:
+                iou_matrix_intent = iou_func_for_matching(pred_boxes.float(), gt_boxes.float())
+            else:
+                iou_matrix_intent = iou_func_for_matching(pred_boxes[:, :4].float(), gt_boxes[:, :4].float())
             
+            gt_matched_for_intent = torch.zeros(num_gt, dtype=torch.bool)
             sort_idx_intent = torch.argsort(pred_scores, descending=True)
 
             for i in range(num_pred_after_nms):
-                pred_original_idx = sort_idx_intent[i] # Original index of this prediction in the NMS'd list
-                
+                pred_original_idx = sort_idx_intent[i]
                 pred_ious_with_gts = iou_matrix_intent[pred_original_idx, :]
                 if pred_ious_with_gts.numel() == 0: continue
                 best_iou_for_pred, best_gt_idx_for_pred = torch.max(pred_ious_with_gts, dim=0)
@@ -278,7 +317,8 @@ def main_eval_vit():
                         gt_matched_for_intent[best_gt_idx_for_pred] = True
                         matched_pred_intentions_vit.append(pred_intentions[pred_original_idx].item())
                         matched_gt_intentions_vit.append(gt_intentions[best_gt_idx_for_pred].item())
-
+    
+    # ... (Rest of intention metrics printing - no change) ...
     if matched_pred_intentions_vit:
         print(f"\n--- ViT Intention Prediction Results (on TP detections @ IoU>={IOU_THRESHOLD_FOR_INTENTION_MATCH}) ---")
         labels_report = list(range(NUM_INTENTION_CLASSES))
@@ -298,6 +338,7 @@ def main_eval_vit():
             print(f"  {name:<20}: {f1_per_class_vit[i]:.4f}")
     else:
         print(f"\nNo True Positive detections found for ViT model at IoU >= {IOU_THRESHOLD_FOR_INTENTION_MATCH} to evaluate intention.")
+
 
     print("\n--- Evaluation Script for ViT Finished ---")
 

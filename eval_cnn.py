@@ -54,14 +54,15 @@ def main_eval_cnn():
         print("WARNING: EVAL_USE_ROTATED_IOU is True, but Shapely is not available. "
               "Falling back to axis-aligned IoU.")
 
-    # --- Validate Data Path ---
+    # ... (Validate Data Path - no change) ...
     val_data_path = Path(VAL_DATA_DIR)
     if not val_data_path.is_dir():
         print(f"ERROR: Evaluation data directory not found: {VAL_DATA_DIR}")
         print("Please update the VAL_DATA_DIR variable in this script.")
-        return # Changed from exit() to return for better script structure
+        return
 
     # --- Load Trained CNN Model ---
+    # ... (no change in loading logic) ...
     print(f"\n--- Loading TRAINED CNN Model for Evaluation ---")
     print(f"Model Path: {MODEL_SAVE_PATH_CNN}")
 
@@ -75,7 +76,6 @@ def main_eval_cnn():
         print("CNN Checkpoint loaded successfully.")
     except Exception as e:
         print(f"ERROR: Failed to load CNN checkpoint from {MODEL_SAVE_PATH_CNN}: {e}")
-        # traceback.print_exc() # Keep for debugging if needed
         return
 
     loaded_cnn_backbone_cfg = checkpoint_cnn.get('backbone_cfg')
@@ -83,16 +83,16 @@ def main_eval_cnn():
         print("ERROR: 'backbone_cfg' not found in the CNN checkpoint. Using default (may be incorrect).")
         loaded_cnn_backbone_cfg = {
             'block': BasicBlock,
-            'lidar_input_channels': LIDAR_TOTAL_CHANNELS, # From constants
-            'map_input_channels': MAP_CHANNELS           # From constants
+            'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
+            'map_input_channels': MAP_CHANNELS
         }
 
     try:
+        # Corrected model instantiation name
         model_to_evaluate_cnn = IntentNetCNN(backbone_cfg=loaded_cnn_backbone_cfg).to(DEVICE)
         print("CNN Model structure instantiated successfully.")
     except Exception as e:
         print(f"ERROR: Failed to instantiate CNN model: {e}")
-        # traceback.print_exc()
         return
 
     if 'model_state_dict' in checkpoint_cnn:
@@ -101,7 +101,6 @@ def main_eval_cnn():
             print("TRAINED CNN Model state_dict loaded successfully.")
         except Exception as e:
             print(f"ERROR: Failed to load CNN model state_dict: {e}")
-            # traceback.print_exc()
             return
     else:
         print("ERROR: 'model_state_dict' not found in the CNN checkpoint.")
@@ -111,11 +110,13 @@ def main_eval_cnn():
     print("TRAINED CNN Model set to evaluation mode.")
     print("--------------------")
 
+
     # --- Prepare DataLoader and Anchors for CNN Evaluation ---
+    # ... (no change in DataLoader and Anchor generation) ...
     print("\n--- Preparing Evaluation DataLoader (for CNN) ---")
     try:
         eval_dataset_cnn = ArgoverseIntentNetDataset(data_dir=VAL_DATA_DIR, is_train=False)
-        if not eval_dataset_cnn: # Or len(eval_dataset_cnn) == 0, though validator should raise error
+        if not eval_dataset_cnn:
             print("ERROR: Evaluation dataset is empty or failed to initialize.")
             return
         eval_loader_cnn = DataLoader(
@@ -127,7 +128,6 @@ def main_eval_cnn():
             print("Warning: Eval loader for CNN is empty, but dataset is not. Check batch_size.")
     except Exception as e_data:
         print(f"Error initializing eval dataset/loader for CNN: {e_data}")
-        # traceback.print_exc()
         return
 
     print("\n--- Generating Anchors for CNN ---")
@@ -141,13 +141,14 @@ def main_eval_cnn():
         print(f"Anchors for CNN evaluation generated (stride {FEATURE_MAP_STRIDE_CNN}): {anchors_for_cnn_eval.shape}")
     except Exception as e_anchors:
         print(f"ERROR generating anchors for CNN: {e_anchors}")
-        # traceback.print_exc()
         return
 
+
     # --- Run Inference Loop with the LOADED (TRAINED) CNN Model ---
+    # ... (no change in inference loop) ...
     print("\n--- Running Inference with LOADED CNN Model ---")
     all_sample_results_cnn = []
-    with torch.inference_mode(): # Changed from torch.no_grad() for more explicitness in inference
+    with torch.inference_mode():
         progress_bar_cnn = tqdm(eval_loader_cnn, desc="CNN Evaluation Inference", unit="batch")
         for batch_idx, batch_data in enumerate(progress_bar_cnn):
             if batch_data is None:
@@ -175,14 +176,21 @@ def main_eval_cnn():
                         cls_logits_sample = det_cls_logits[b_idx]
                         box_preds_rel_sample = det_box_preds_rel[b_idx]
                         int_logits_sample = int_logits[b_idx]
-                        scores_sample = torch.sigmoid(cls_logits_sample)
+                        scores_sample = torch.sigmoid(cls_logits_sample) # Sigmoid for objectness
+                        
+                        # Flatten scores if they are not already [NumAnchors]
+                        if scores_sample.ndim > 1:
+                            scores_sample = scores_sample.squeeze(-1) 
+
                         keep_conf_indices = torch.where(scores_sample >= CONFIDENCE_THRESHOLD)[0]
+
 
                         if keep_conf_indices.numel() > 0:
                             scores_filtered = scores_sample[keep_conf_indices]
                             anchors_filtered = anchors_for_cnn_eval[keep_conf_indices]
                             box_preds_rel_filtered = box_preds_rel_sample[keep_conf_indices]
-                            int_logits_filtered = int_logits_sample[keep_conf_indices]
+                            int_logits_filtered = int_logits[b_idx].reshape(-1, NUM_INTENTION_CLASSES)[keep_conf_indices]
+
 
                             boxes_decoded_abs = decode_box_predictions(box_preds_rel_filtered, anchors_filtered)
                             nms_keep_indices = apply_nms(boxes_decoded_abs, scores_filtered, NMS_IOU_THRESHOLD)
@@ -193,7 +201,6 @@ def main_eval_cnn():
                                 sample_preds['pred_intentions'] = torch.argmax(int_logits_filtered[nms_keep_indices], dim=-1).cpu()
                     except Exception as e_post:
                         print(f"Error during post-processing CNN sample {b_idx} in batch {batch_idx}: {e_post}")
-                        # traceback.print_exc() # Keep for debugging
 
                     current_gt = gt_list_batch_cpu[b_idx]
                     all_sample_results_cnn.append({
@@ -203,9 +210,9 @@ def main_eval_cnn():
                     })
             except Exception as e_batch:
                 print(f"!!! ERROR processing CNN eval batch {batch_idx}: {e_batch}")
-                # traceback.print_exc()
 
     print(f"Collected results for {len(all_sample_results_cnn)} samples using TRAINED CNN model.")
+
 
     # --- Detection Evaluation (mAP) for CNN ---
     print("\n--- Calculating Detection mAP for TRAINED CNN Model ---")
@@ -213,10 +220,17 @@ def main_eval_cnn():
     if not all_sample_results_cnn:
         print("WARNING: 'all_sample_results_cnn' is empty. Cannot calculate mAP.")
     else:
+        # Determine which IoU function to use based on the flag
+        iou_func_for_eval = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
+        if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+             iou_func_for_eval = compute_axis_aligned_iou # Fallback already handled by compute_rotated_iou, but explicit here too
+        
+        print(f"  Using IoU function for mAP: {iou_func_for_eval.__name__}")
+
         for sample_result in tqdm(all_sample_results_cnn, desc="Calculating AP per sample (CNN)", unit="sample"):
             pred_scores = sample_result['pred_scores']
-            pred_boxes = sample_result['pred_boxes_xywha']
-            gt_boxes = sample_result['gt_boxes_xywha']
+            pred_boxes = sample_result['pred_boxes_xywha'] # These are [cx, cy, w, l, angle_rad]
+            gt_boxes = sample_result['gt_boxes_xywha']   # These are [cx, cy, w, l, angle_rad]
             num_gt = gt_boxes.shape[0]
             num_pred = pred_boxes.shape[0]
 
@@ -224,48 +238,45 @@ def main_eval_cnn():
                 if num_pred == 0:
                     average_precisions_per_iou_cnn[iou_thresh_eval].append(1.0 if num_gt == 0 else 0.0)
                     continue
-                if num_gt == 0: # Has predictions but no GT
+                if num_gt == 0:
                     average_precisions_per_iou_cnn[iou_thresh_eval].append(0.0)
                     continue
 
-                # Sort predictions by score
                 sort_idx = torch.argsort(pred_scores, descending=True)
                 pred_boxes_sorted = pred_boxes[sort_idx]
-                # pred_scores_sorted = pred_scores[sort_idx] # Not used directly in AP calc below but good for debug
 
-                iou_matrix = compute_axis_aligned_iou(pred_boxes_sorted[:, :4].float(), gt_boxes[:, :4].float())
-                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=DEVICE)
-                tp_flags = torch.zeros(num_pred, dtype=torch.bool, device=DEVICE) 
+                # Use the selected IoU function
+                if iou_func_for_eval == compute_rotated_iou:
+                    iou_matrix = iou_func_for_eval(pred_boxes_sorted.float(), gt_boxes.float())
+                else: # compute_axis_aligned_iou
+                    iou_matrix = iou_func_for_eval(pred_boxes_sorted[:, :4].float(), gt_boxes[:, :4].float())
+
+                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu') # Match device of iou_matrix if possible
+                tp_flags = torch.zeros(num_pred, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu')
 
                 for pred_idx in range(num_pred):
                     pred_ious_with_gts = iou_matrix[pred_idx, :]
-                    if pred_ious_with_gts.numel() == 0: continue # Should not happen if num_gt > 0
-
+                    if pred_ious_with_gts.numel() == 0: continue
                     best_iou_for_pred, best_gt_idx_for_pred = torch.max(pred_ious_with_gts, dim=0)
 
                     if best_iou_for_pred >= iou_thresh_eval:
                         if not gt_matched_flags[best_gt_idx_for_pred]:
                             tp_flags[pred_idx] = True
                             gt_matched_flags[best_gt_idx_for_pred] = True
-                        # else: # Already matched to this GT by a higher-scoring prediction
-                            # fp_flags[pred_idx] = True # This pred is a FP for this GT
-                    # else: # Does not meet IoU threshold
-                        # fp_flags[pred_idx] = True # This pred is a FP
-
-                # Calculate AP using 11-point interpolation or other standard method
-                # The following is a common way to calculate AP:
+                
                 tp_cumsum = torch.cumsum(tp_flags.float(), dim=0)
-                # fp_cumsum = torch.cumsum(fp_flags.float(), dim=0) # Not needed if using (pred_idx + 1) for total preds
-                recall_steps = tp_cumsum / (num_gt + 1e-9) # Add epsilon to avoid division by zero
-                precision_steps = tp_cumsum / (torch.arange(1, num_pred + 1, device=tp_flags.device).float() + 1e-9) # tp / (tp+fp)
+                recall_steps = tp_cumsum / (num_gt + 1e-9)
+                precision_steps = tp_cumsum / (torch.arange(1, num_pred + 1, device=tp_flags.device).float() + 1e-9)
 
                 ap = calculate_ap(recall_steps.cpu().numpy(), precision_steps.cpu().numpy())
                 average_precisions_per_iou_cnn[iou_thresh_eval].append(ap)
 
+    # ... (Rest of mAP printing - no change) ...
     print("\n--- TRAINED CNN Detection Results (mAP) ---")
     for iou_thresh_eval, ap_list in average_precisions_per_iou_cnn.items():
         mean_ap_cnn = np.mean(ap_list) if ap_list else 0.0
         print(f"TRAINED CNN mAP @ IoU={iou_thresh_eval:.1f}: {mean_ap_cnn:.4f}")
+
 
     # --- Intention Prediction Evaluation for CNN ---
     print("\n--- Calculating Intention Prediction Metrics for TRAINED CNN Model ---")
@@ -274,11 +285,18 @@ def main_eval_cnn():
     if not all_sample_results_cnn:
         print("WARNING: 'all_sample_results_cnn' is empty. Cannot calculate intention metrics.")
     else:
+        # Determine which IoU function to use based on the flag (same as mAP)
+        iou_func_for_matching = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
+        if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
+             iou_func_for_matching = compute_axis_aligned_iou # Fallback
+        
+        print(f"  Using IoU function for intention matching: {iou_func_for_matching.__name__}")
+
         for sample_result in tqdm(all_sample_results_cnn, desc="Matching for Intention Eval (CNN)", unit="sample"):
             pred_scores = sample_result['pred_scores']
-            pred_boxes = sample_result['pred_boxes_xywha']
+            pred_boxes = sample_result['pred_boxes_xywha'] # [cx, cy, w, l, angle_rad]
             pred_intentions = sample_result['pred_intentions']
-            gt_boxes = sample_result['gt_boxes_xywha']
+            gt_boxes = sample_result['gt_boxes_xywha']   # [cx, cy, w, l, angle_rad]
             gt_intentions = sample_result['gt_intentions']
 
             num_gt = gt_boxes.shape[0]
@@ -286,18 +304,20 @@ def main_eval_cnn():
 
             if num_gt == 0 or num_pred_after_nms == 0:
                 continue
+            
+            # Use the selected IoU function for matching
+            if iou_func_for_matching == compute_rotated_iou:
+                iou_matrix_intent = iou_func_for_matching(pred_boxes.float(), gt_boxes.float())
+            else: # compute_axis_aligned_iou
+                iou_matrix_intent = iou_func_for_matching(pred_boxes[:, :4].float(), gt_boxes[:, :4].float())
 
-            iou_matrix_intent = compute_axis_aligned_iou(pred_boxes[:, :4].float(), gt_boxes[:, :4].float())
             gt_matched_for_intent = torch.zeros(num_gt, dtype=torch.bool)
-
-            # Sort predictions by score for consistent matching (highest score gets first dibs)
             sort_idx_intent = torch.argsort(pred_scores, descending=True)
 
             for i in range(num_pred_after_nms):
-                pred_idx = sort_idx_intent[i] # Process in order of score
+                pred_idx = sort_idx_intent[i]
                 pred_ious_with_gts = iou_matrix_intent[pred_idx, :]
                 if pred_ious_with_gts.numel() == 0: continue
-
                 best_iou_for_pred, best_gt_idx_for_pred = torch.max(pred_ious_with_gts, dim=0)
 
                 if best_iou_for_pred >= IOU_THRESHOLD_FOR_INTENTION_MATCH:
@@ -305,12 +325,11 @@ def main_eval_cnn():
                         gt_matched_for_intent[best_gt_idx_for_pred] = True
                         matched_pred_intentions_cnn.append(pred_intentions[pred_idx].item())
                         matched_gt_intentions_cnn.append(gt_intentions[best_gt_idx_for_pred].item())
-                        # Once a GT is matched, it cannot be matched again by a lower-scoring prediction
-
+    
+    # ... (Rest of intention metrics printing - no change) ...
     if matched_pred_intentions_cnn:
         print(f"\n--- TRAINED CNN Intention Prediction Results (on TP detections @ IoU>={IOU_THRESHOLD_FOR_INTENTION_MATCH}) ---")
         labels_report = list(range(NUM_INTENTION_CLASSES))
-        # Ensure INTENTIONS_MAP_REV is available (from constants.py)
         target_names_report = [INTENTIONS_MAP_REV.get(i, f"Class_{i}") for i in labels_report]
 
         overall_acc_cnn = accuracy_score(matched_gt_intentions_cnn, matched_pred_intentions_cnn)
@@ -327,6 +346,7 @@ def main_eval_cnn():
             print(f"  {name:<20}: {f1_per_class_cnn[i]:.4f}")
     else:
         print(f"\nNo True Positive detections found for TRAINED CNN model at IoU >= {IOU_THRESHOLD_FOR_INTENTION_MATCH} to evaluate intention prediction.")
+
 
     print("\n--- Evaluation Script for TRAINED CNN Finished ---")
 
