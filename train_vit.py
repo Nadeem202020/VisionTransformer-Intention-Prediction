@@ -41,8 +41,8 @@ if __name__ == '__main__':
     VIT_BACKBONE_CFG = {
         'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
         'map_input_channels': MAP_CHANNELS,
-        'vit_model_name_lidar': 'vit_small_patch16_224', 
-        'vit_model_name_map': 'vit_small_patch16_224',   
+        'vit_model_name_lidar': 'vit_small_patch8_224', 
+        'vit_model_name_map': 'vit_small_patch8_224',   
         'pretrained_lidar': False, # Set to True to use timm's pretrained weights (if available and compatible)
         'pretrained_map': False,
         'img_size': VIT_IMG_SIZE, # Crucial: must match input tensor size to ViT
@@ -53,14 +53,14 @@ if __name__ == '__main__':
         'fusion_block_planes': 512,        # Channels after fusion ResBlocks
         'fusion_block_layers': 2,          # Number of ResBlocks in fusion
         'fusion_block_kernel_size': 3,
-        'fusion_block_stride': 1,          # Keep 1 if ViT patch already gives 16x, or 2 for 32x total
+        'fusion_block_stride': 1,          # Keep 1 if ViT patch already gives 8x
         'res_block_type': BasicBlock
     }
     try:
         # Assumes vit_model_name_lidar is like '..._patch<N>_...'
         vit_patch_stride_val = int(VIT_BACKBONE_CFG['vit_model_name_lidar'].split('_patch')[-1].split('_')[0])
     except ValueError:
-        vit_patch_stride_val = 16 # Default if parsing fails
+        vit_patch_stride_val = 8 # Default if parsing fails
         print(f"Warning: Could not parse patch stride from ViT name, defaulting to {vit_patch_stride_val}.")
     FEATURE_MAP_STRIDE_VIT = vit_patch_stride_val * VIT_BACKBONE_CFG.get('fusion_block_stride', 1)
 
