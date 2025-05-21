@@ -86,8 +86,8 @@ def main_eval_vit():
         loaded_vit_backbone_cfg.setdefault('img_size', (GRID_HEIGHT_PX, GRID_WIDTH_PX))
         loaded_vit_backbone_cfg.setdefault('lidar_input_channels', LIDAR_TOTAL_CHANNELS)
         loaded_vit_backbone_cfg.setdefault('map_input_channels', MAP_CHANNELS)
-        loaded_vit_backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch16_224')
-        loaded_vit_backbone_cfg.setdefault('vit_model_name_map', 'vit_tiny_patch16_224') # Original IntentNet uses tiny for map
+        loaded_vit_backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch8_224')
+        loaded_vit_backbone_cfg.setdefault('vit_model_name_map', 'vit_tiny_patch8_224') # Original IntentNet uses tiny for map
         loaded_vit_backbone_cfg.setdefault('pretrained_lidar', False)
         loaded_vit_backbone_cfg.setdefault('pretrained_map', False)
         loaded_vit_backbone_cfg.setdefault('drop_path_rate_lidar', 0.1)
@@ -125,11 +125,11 @@ def main_eval_vit():
 
     print("\nGenerating Anchors for ViT...")
     # Corrected anchor stride calculation
-    vit_model_name_for_stride = loaded_vit_backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch16_224')
+    vit_model_name_for_stride = loaded_vit_backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch8_224')
     try:
         vit_patch_stride = int(vit_model_name_for_stride.split('_patch')[-1].split('_')[0])
     except ValueError:
-        vit_patch_stride = 16
+        vit_patch_stride = 8
     fusion_block_stride_from_cfg = loaded_vit_backbone_cfg.get('fusion_block_stride', 1)
     actual_feature_map_stride_vit = vit_patch_stride * fusion_block_stride_from_cfg
     print(f"Using feature_map_stride = {actual_feature_map_stride_vit} for ViT anchor generation (ViT patch: {vit_patch_stride}, Fusion stride: {fusion_block_stride_from_cfg}).")
