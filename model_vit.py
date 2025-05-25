@@ -39,8 +39,8 @@ class TwoStreamViTBackbone(nn.Module):
     def __init__(self,
                  lidar_input_channels: int = LIDAR_TOTAL_CHANNELS,
                  map_input_channels: int = MAP_CHANNELS,
-                 vit_model_name_lidar: str = 'vit_small_patch16_224',
-                 vit_model_name_map: str = 'vit_small_patch16_224',
+                 vit_model_name_lidar: str = 'vit_small_patch8_224',
+                 vit_model_name_map: str = 'vit_small_patch8_224',
                  pretrained_lidar: bool = False,
                  pretrained_map: bool = False,
                  img_size: tuple[int, int] = (GRID_HEIGHT_PX, GRID_WIDTH_PX),
@@ -51,7 +51,7 @@ class TwoStreamViTBackbone(nn.Module):
                  fusion_block_planes: int = 512,
                  fusion_block_layers: int = 2,
                  fusion_block_kernel_size: int = 3,
-                 fusion_block_stride: int = 1, # MODIFICATION: Default to 1 for 16x total stride
+                 fusion_block_stride: int = 1,
                  res_block_type: type[BasicBlock] = BasicBlock
                 ):
         super().__init__()
@@ -149,13 +149,13 @@ class IntentNetViT(nn.Module):
     def __init__(self, backbone_cfg: dict | None = None, head_cfg: dict | None = None):
         super().__init__()
         if backbone_cfg is None: backbone_cfg = {}
-        backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch16_224')
-        backbone_cfg.setdefault('vit_model_name_map', 'vit_small_patch16_224') # MODIFICATION: Changed map model
+        backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch8_224')
+        backbone_cfg.setdefault('vit_model_name_map', 'vit_small_patch8_224') # MODIFICATION: Changed map model
         backbone_cfg.setdefault('pretrained_lidar', False)
         backbone_cfg.setdefault('pretrained_map', False)
         backbone_cfg.setdefault('img_size', (GRID_HEIGHT_PX, GRID_WIDTH_PX))
         backbone_cfg.setdefault('lidar_adapter_out_channels', 192)
-        backbone_cfg.setdefault('map_adapter_out_channels', 192) # MODIFICATION: Adjusted for vit_small_patch16_224 symmetry if desired
+        backbone_cfg.setdefault('map_adapter_out_channels', 192) 
         # Fusion block defaults
         backbone_cfg.setdefault('fusion_block_planes', 512)
         backbone_cfg.setdefault('fusion_block_layers', 2)
@@ -171,11 +171,11 @@ class IntentNetViT(nn.Module):
         
         print(f"IntentNetViT Heads Initialized. Input Channels: {feature_channels}")
         # Calculate and print the effective stride for the heads
-        # Assuming patch size is in the name like '..._patch16_...'
+        # Assuming patch size is in the name like '..._patch8_...'
         try:
-            vit_patch_stride = int(backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch16_224').split('_patch')[-1].split('_')[0])
+            vit_patch_stride = int(backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch8_224').split('_patch')[-1].split('_')[0])
         except ValueError:
-            vit_patch_stride = 16 # Fallback if parsing fails
+            vit_patch_stride = 8 # Fallback if parsing fails
             print(f"Warning: Could not parse patch stride from ViT name, defaulting to {vit_patch_stride}.")
             
         fusion_stride = backbone_cfg.get('fusion_block_stride', 1) # Get the actual stride used
