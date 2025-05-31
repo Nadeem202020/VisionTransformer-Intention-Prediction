@@ -5,38 +5,30 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 
-# Project-specific imports
 from constants import (LIDAR_TOTAL_CHANNELS, MAP_CHANNELS, GRID_HEIGHT_PX, GRID_WIDTH_PX,
                        NUM_INTENTION_CLASSES, ANCHOR_CONFIGS_PAPER,
                        AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO)
 from dataset import ArgoverseIntentNetDataset, collate_fn
-from model_cnn import IntentNetCNN, BasicBlock # Renamed model IntentNetDetectorIntention -> IntentNetCNN
+from model_cnn import IntentNetCNN, BasicBlock 
 from loss import DetectionIntentionLoss
 from utils import generate_anchors
 
 if __name__ == '__main__':
-    # --- Configuration ---
-    # USER_CONFIG: Update this path to your Argoverse 2 training data
-    TRAIN_DATA_DIR = "./data/argoverse2/sensor/train" # Example placeholder
-    # USER_CONFIG: Directory to save model checkpoints
+    TRAIN_DATA_DIR = "./data/argoverse2/sensor/train" 
     MODEL_SAVE_DIR_CNN = "./trained_models_cnn"
 
-    # Training Hyperparameters
     TRAIN_BATCH_SIZE = 8
-    NUM_WORKERS = 0 # Set > 0 for multiprocessing data loading if not on Windows or for debugging
+    NUM_WORKERS = 0
     LEARNING_RATE = 1e-4
     WEIGHT_DECAY = 1e-4
-    NUM_EPOCHS = 10 # As per your experiments
-
-    # Model & Loss Configuration
-    USE_ROTATED_IOU = False # As per your experiments
-    APPLY_INTENTION_DOWNSAMPLING = True # As per your experiments
-    USE_INTENTION_WEIGHTS = False # If False, class_weights from data are not used by loss_fn
+    NUM_EPOCHS = 10 
+    USE_ROTATED_IOU = False 
+    APPLY_INTENTION_DOWNSAMPLING = True
+    USE_INTENTION_WEIGHTS = False 
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # CNN Backbone Specific Configuration
     CNN_BACKBONE_CFG = {
         'block': BasicBlock,
         'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
@@ -47,25 +39,21 @@ if __name__ == '__main__':
         'num_blocks_per_stage': 2,
         'res_block2_kernel_size': 5, 'fusion_block_kernel_size': 3
     }
-    FEATURE_MAP_STRIDE_CNN = 8 # Based on CNNBackbone architecture
+    FEATURE_MAP_STRIDE_CNN = 8 
 
     print(f"--- CNN Training Configuration ---")
     print(f"Device: {DEVICE}")
     print(f"Training Data Directory: {TRAIN_DATA_DIR}")
-    # print(f"AV2 Map API Available: {AV2_MAP_AVAILABLE}") # Printed by constants.py
-    # print(f"Shapely Available: {SHAPELY_AVAILABLE}")   # Printed by constants.py
     print(f"Batch Size: {TRAIN_BATCH_SIZE}, Num Epochs: {NUM_EPOCHS}, LR: {LEARNING_RATE}")
     print(f"Feature Map Stride (CNN): {FEATURE_MAP_STRIDE_CNN}")
     print(f"Apply Intention Downsampling: {APPLY_INTENTION_DOWNSAMPLING}")
     print(f"---------------------------------")
 
-    # --- Validate Data Path ---
     train_data_path = Path(TRAIN_DATA_DIR)
     if not train_data_path.is_dir():
         print(f"ERROR: Training data directory not found: {TRAIN_DATA_DIR}")
         exit()
 
-    # --- Create Dataset & DataLoader ---
     print("\nInitializing training dataset...")
     try:
         train_dataset = ArgoverseIntentNetDataset(data_dir=TRAIN_DATA_DIR, is_train=True)
@@ -81,7 +69,6 @@ if __name__ == '__main__':
         print(f"ERROR initializing training dataset/loader: {e}")
         exit()
 
-    # --- Calculate Intention Class Weights (Optional, if USE_INTENTION_WEIGHTS is True) ---
     intention_weights_tensor = None
     if USE_INTENTION_WEIGHTS and APPLY_INTENTION_DOWNSAMPLING:
         print("Warning: Both USE_INTENTION_WEIGHTS and APPLY_INTENTION_DOWNSAMPLING are True. "
@@ -89,7 +76,6 @@ if __name__ == '__main__':
     elif USE_INTENTION_WEIGHTS:
         print("\nCalculating intention class weights from training data...")
         counts = np.zeros(NUM_INTENTION_CLASSES, dtype=np.int64)
-        # Use a larger batch size for faster weight calculation if memory allows
         temp_loader_bs = max(16, TRAIN_BATCH_SIZE * 2)
         temp_loader = DataLoader(train_dataset, batch_size=temp_loader_bs, shuffle=False,
                                  num_workers=NUM_WORKERS, collate_fn=collate_fn)
@@ -104,10 +90,9 @@ if __name__ == '__main__':
 
         total_counts = counts.sum()
         if total_counts > 0:
-            # Inverse frequency weighting, smoothed
             counts_smooth = counts + 1.0
             class_weights = total_counts / counts_smooth
-            class_weights_normalized = class_weights / np.sum(class_weights) # Normalize to sum to 1
+            class_weights_normalized = class_weights / np.sum(class_weights) 
             intention_weights_tensor = torch.tensor(class_weights_normalized, dtype=torch.float32).to(DEVICE)
             print("Calculated Intention Class Counts (Train Data):", counts)
             print("Calculated Normalized Intention Weights:", class_weights_normalized.round(4))
@@ -115,9 +100,8 @@ if __name__ == '__main__':
             print("Warning: No intention labels found in training data. Cannot calculate class weights.")
     print("---------------------------------")
 
-    # --- Initialize Model, Loss, Optimizer ---
     print("\nInitializing CNN Model, Loss Function, and Optimizer...")
-    model = IntentNetCNN(backbone_cfg=CNN_BACKBONE_CFG).to(DEVICE) # Use renamed class
+    model = IntentNetCNN(backbone_cfg=CNN_BACKBONE_CFG).to(DEVICE) 
 
     loss_cfg_weights = intention_weights_tensor if USE_INTENTION_WEIGHTS and not APPLY_INTENTION_DOWNSAMPLING else None
     loss_fn = DetectionIntentionLoss(
@@ -131,7 +115,6 @@ if __name__ == '__main__':
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=False)
 
-    # --- Generate Anchors ---
     print("\nGenerating anchors...")
     anchors = generate_anchors(
         bev_height=GRID_HEIGHT_PX,
@@ -142,7 +125,6 @@ if __name__ == '__main__':
     print(f"Anchors generated (stride {FEATURE_MAP_STRIDE_CNN}), shape: {anchors.shape}")
     print("---------------------------------")
 
-    # --- Training Loop ---
     print("\n--- Starting CNN Training ---")
     for epoch in range(NUM_EPOCHS):
         model.train()
@@ -203,7 +185,6 @@ if __name__ == '__main__':
 
     print("\n--- CNN Training Finished ---")
 
-    # Save the final CNN model
     save_dir = Path(MODEL_SAVE_DIR_CNN) 
     save_dir.mkdir(parents=True, exist_ok=True) 
     final_model_path = save_dir / "cnn_model.pth" 

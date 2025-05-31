@@ -2,13 +2,12 @@ import argparse
 import time
 from pathlib import Path
 import pandas as pd
-from tqdm import tqdm # For overall progress and pandas integration
-import traceback # For debugging, can be commented out in final version
+from tqdm import tqdm 
+import traceback 
 
-# Project-specific imports (assuming all files are in the same root directory)
 from constants import (AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE, VEHICLE_CATEGORIES,
-                       INTENTIONS_MAP) # Import only what's needed by this script or its direct calls
-from dataset import ScenarioValidator # Assuming dataset.py is in the same directory
+                       INTENTIONS_MAP) 
+from dataset import ScenarioValidator 
 from heuristic_labeling import get_vehicle_intention_heuristic_enhanced
 
 # --- Configuration ---
@@ -26,10 +25,8 @@ def preprocess_scenario(scenario_info: namedtuple, force_recompute: bool = False
     output_path = log_dir / OUTPUT_ANNOTATION_FILENAME
 
     if not force_recompute and output_path.exists():
-        # print(f"  Skipping {log_id}: Output file already exists.")
         return "skipped"
 
-    # print(f"Processing scenario {log_id}...")
     try:
         annotations_df = pd.read_feather(annotations_path)
         static_map = None
@@ -37,45 +34,32 @@ def preprocess_scenario(scenario_info: namedtuple, force_recompute: bool = False
         if AV2_MAP_AVAILABLE:
             map_dir = map_json_path.parent
             if map_dir.is_dir() and any(map_dir.glob("log_map_archive_*.json")):
-                # Conditional import if not already imported globally
                 from av2.map.map_api import ArgoverseStaticMap
                 static_map = ArgoverseStaticMap.from_map_dir(map_dir, build_raster=False)
             else:
                 print(f"  Warning: Map data missing for {log_id}. Cannot reliably compute intentions requiring map context.")
-                # Decide if you want to proceed with a None map or skip.
-                # If map is critical for some heuristics, they should handle static_map being None.
-        # else:
-            # print(f"  Info: AV2 Map API not available. Proceeding without map context for {log_id}.")
-
-        # Define a helper to apply to each row (track at a specific timestamp)
         def calculate_intent_for_row(row, full_log_df, current_static_map):
             if row['category'] in VEHICLE_CATEGORIES:
                 return get_vehicle_intention_heuristic_enhanced(
                     track_id=row['track_uuid'],
                     current_ts_ns=row['timestamp_ns'],
-                    all_log_gt_boxes_df=full_log_df, # Pass the full DataFrame for this log
+                    all_log_gt_boxes_df=full_log_df,
                     static_map=current_static_map
-                    # Other heuristic parameters will use defaults from heuristic_labeling.py or constants.py
                 )
-            return -1 # Default for non-vehicle categories or unhandled cases
+            return -1 
 
-        # Apply the heuristic. tqdm.pandas provides progress for the apply operation.
-        # Ensure tqdm is registered with pandas if not done globally
-        if not hasattr(pd.Series, 'progress_apply'): # Check if already registered
+        if not hasattr(pd.Series, 'progress_apply'): 
             tqdm.pandas(desc=f"Intent Calc {log_id[:8]}", leave=False)
         
-        # Pass the entire annotations_df for the current log for history lookup
         annotations_df['heuristic_intent'] = annotations_df.progress_apply(
             lambda row: calculate_intent_for_row(row, annotations_df, static_map),
             axis=1
         )
 
         annotations_df.to_feather(output_path)
-        # print(f"  Successfully processed and saved {log_id}.")
         return "processed"
     except Exception as e:
         print(f"  ERROR processing scenario {log_id}: {e}")
-        # traceback.print_exc() # Uncomment for detailed debugging
         return "failed"
 
 def main(data_root_dir: str, splits: list[str] = None, force_recompute: bool = False):
@@ -83,7 +67,7 @@ def main(data_root_dir: str, splits: list[str] = None, force_recompute: bool = F
     Main function to iterate over specified dataset splits and preprocess intention labels.
     """
     if splits is None:
-        splits = ["train", "val"] # Default splits to process
+        splits = ["train", "val"] 
 
     print(f"Starting intention label pre-computation.")
     print(f"Output file name per log: {OUTPUT_ANNOTATION_FILENAME}")
@@ -96,11 +80,6 @@ def main(data_root_dir: str, splits: list[str] = None, force_recompute: bool = F
 
     for split_name in splits:
         print(f"\nProcessing split: {split_name}")
-        # USER_CONFIG: Adjust this path structure if your data is organized differently
-        # Assumes data_root_dir contains subfolders like 'train', 'val'
-        # And each of those contains the scenario log folders.
-        # Example: data_root_dir = "/path/to/argoverse2/sensor/"
-        # Then split_dir will be "/path/to/argoverse2/sensor/train/"
         split_dir = Path(data_root_dir) / split_name
         if not split_dir.is_dir():
             print(f"  Directory for split '{split_name}' not found at: {split_dir}. Skipping.")

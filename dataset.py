@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset # DataLoader is not used directly in this file
+from torch.utils.data import Dataset 
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -10,15 +10,15 @@ import traceback
 import time
 import os
 from collections import namedtuple
-# cv2 is imported in utils.py where rasterize_map_ego_centric is defined
 
-# Assuming all custom modules are in the same root directory
+
+
 from constants import (LIDAR_SWEEPS, AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        GRID_HEIGHT_PX, GRID_WIDTH_PX, VOXEL_SIZE_M, BEV_X_MIN, BEV_X_MAX,
                        BEV_Y_MIN, BEV_Y_MAX, BEV_PIXEL_OFFSET_X, BEV_PIXEL_OFFSET_Y, Z_MIN, Z_MAX,
                        LIDAR_HEIGHT_CHANNELS, LIDAR_TOTAL_CHANNELS, MAP_CHANNELS,
-                       VEHICLE_CATEGORIES) # Ensure all needed constants are imported
-from utils import (load_ego_poses, transform_points, # Removed unused: get_ego_centric_transform_matrix, world_to_bev_pixel
+                       VEHICLE_CATEGORIES) 
+from utils import (load_ego_poses, transform_points, 
                    create_intentnet_lidar_bev, rasterize_map_ego_centric,
                    prepare_gt_for_frame, augment_bev)
 from heuristic_labeling import get_vehicle_intention_heuristic_enhanced
@@ -34,13 +34,8 @@ class ScenarioValidator:
         self.ScenarioPaths = namedtuple("ScenarioPaths", ["log_dir", "map_path", "annotations_path"])
         self.skip_known_corrupted = skip_known_corrupted
         self.min_feather_size_bytes = min_feather_size_bytes
-        # List of known corrupted log directory names
-        self.KNOWN_CORRUPTED_LOGS = {
-            # Add log IDs if any are identified as consistently problematic
-        }
-        # Optional: Could print these for debugging during init
-        # print(f"ScenarioValidator: Skip known corrupted logs: {self.skip_known_corrupted}")
-        # print(f"ScenarioValidator: Known corrupted logs to skip: {self.KNOWN_CORRUPTED_LOGS}")
+        
+        self.KNOWN_CORRUPTED_LOGS = {}
 
     def find_valid_scenarios(self) -> list[namedtuple]:
         """
@@ -50,7 +45,7 @@ class ScenarioValidator:
         """
         valid_scenarios = []
         print(f"ScenarioValidator: Searching for scenarios in: {self.base_path}")
-        if not self.base_path.is_dir(): # Corrected from self.base_path.exists() to is_dir() for clarity
+        if not self.base_path.is_dir(): 
             print(f"Error: Base path does not exist or is not a directory: {self.base_path}")
             return []
 
@@ -60,7 +55,7 @@ class ScenarioValidator:
 
         start_time = time.time()
         try:
-            # os.scandir can be more efficient for listing many directories
+            
             iterator = os.scandir(self.base_path)
         except OSError as e:
             print(f"Error: Cannot scan directory {self.base_path}: {e}")
@@ -130,7 +125,7 @@ class ScenarioValidator:
             if not map_files_fallback:
                 return f"No 'log_map_archive_{log_id}*.json' or generic map file found in map directory"
             map_files = map_files_fallback
-            # print(f"  Warning: Used fallback map glob for {log_id}") # Keep for debugging if needed
+            
 
         return self.ScenarioPaths(
             log_dir=str(scenario_dir),
@@ -150,7 +145,7 @@ def collate_fn(batch: list) -> dict | None:
 
     lidar_bevs = torch.stack([item["lidar_bev"] for item in batch])
     map_bevs = torch.stack([item["map_bev"] for item in batch])
-    gt_list = [item["gt"] for item in batch] # Ground truth kept as a list of dictionaries
+    gt_list = [item["gt"] for item in batch] 
 
     return {"lidar_bev": lidar_bevs, "map_bev": map_bevs, "gt_list": gt_list}
 
@@ -161,7 +156,6 @@ class ArgoverseIntentNetDataset(Dataset):
     Handles loading of LiDAR sweeps, map data, and ground truth annotations.
     """
     def __init__(self, data_dir: str, num_sweeps: int = LIDAR_SWEEPS, is_train: bool = False):
-        # data_dir: Path to the root directory of the dataset split (e.g., train or val).
         self.data_dir = Path(data_dir)
         self.num_sweeps = num_sweeps
         self.is_train = is_train
@@ -171,7 +165,7 @@ class ArgoverseIntentNetDataset(Dataset):
         if not self.valid_scenario_paths:
             raise ValueError(f"No valid scenarios found in {self.data_dir}. Please check the path and data integrity.")
 
-        self.log_data_cache = {}  # Cache for frequently accessed log data (ego poses, GT annotations)
+        self.log_data_cache = {} 
         self.sequences = self._create_sequences()
         if not self.sequences:
             raise ValueError(f"Could not create any valid sequences from the provided scenarios in {self.data_dir}.")
@@ -187,31 +181,31 @@ class ArgoverseIntentNetDataset(Dataset):
             lidar_dir = log_dir / "sensors" / "lidar"
 
             try:
-                if not lidar_dir.is_dir(): # Should be caught by validator, but as a safeguard
+                if not lidar_dir.is_dir(): 
                     print(f"  Warning (_create_sequences): LiDAR directory missing for {log_id}. Skipping.")
                     continue
 
-                # Timestamps are filenames without extension
+                
                 timestamps = sorted([int(p.stem) for p in lidar_dir.glob("*.feather")])
 
                 if len(timestamps) < self.num_sweeps:
-                    continue # Not enough sweeps to form a sequence
+                    continue 
 
-                # Create sequences by sliding a window of size num_sweeps
+                
                 for i in range(len(timestamps) - self.num_sweeps + 1):
-                    current_ts_ns = timestamps[i + self.num_sweeps - 1] # The last sweep in the window is current
-                    sweep_ts_list = timestamps[i : i + self.num_sweeps]   # List of all sweeps in the window
+                    current_ts_ns = timestamps[i + self.num_sweeps - 1] 
+                    sweep_ts_list = timestamps[i : i + self.num_sweeps]   
                     sequences.append({
                         "log_id": log_id,
-                        "log_dir": str(log_dir), # Store as string for easier handling
+                        "log_dir": str(log_dir), 
                         "map_json_path": scenario_info.map_path,
-                        "annotations_path": scenario_info.annotations_path, # Path to original annotations
+                        "annotations_path": scenario_info.annotations_path,
                         "current_ts_ns": current_ts_ns,
                         "sweep_ts_list": sweep_ts_list
                     })
-            except ValueError as e: # If p.stem cannot be converted to int
+            except ValueError as e: 
                 print(f"  Warning (_create_sequences): Error converting timestamp filename in {log_id}: {e}. Skipping.")
-            except Exception as e: # Catch-all for other unexpected errors during sequence creation
+            except Exception as e: 
                 print(f"  Warning (_create_sequences): Unexpected error processing log {log_id}: {e}. Skipping.")
         print(f"Created {len(sequences)} sequences in total.")
         return sequences
@@ -222,44 +216,35 @@ class ArgoverseIntentNetDataset(Dataset):
         This includes ego poses and ground truth annotations (with pre-computed intentions).
         """
         log_dir_path = Path(log_dir)
-        # Path to the pre-computed annotation file with intention labels
         intent_annotation_filename = "annotations_with_intent.feather"
         intent_annotation_file_path = log_dir_path / intent_annotation_filename
 
         if log_id not in self.log_data_cache:
-            # print(f"    CACHE MISS for log: {log_id}. Loading...") # Optional debug print
             try:
                 if not intent_annotation_file_path.is_file():
-                    # This indicates a preprocessing step was missed or failed.
-                    # The heuristic labeling should produce this file for each log.
                     error_msg = (f"FATAL ERROR: Pre-computed intent file missing for log {log_id} "
                                  f"at {intent_annotation_file_path}. "
                                  "Please run the intention pre-computation script.")
                     print(error_msg)
-                    # Raising an error might be too disruptive if only some logs miss it.
-                    # Consider returning None and letting __getitem__ handle it,
-                    # or making the pre-computation script a hard prerequisite.
-                    # For now, we'll let it try to proceed and fail in __getitem__ if data is None.
-                    self.log_data_cache[log_id] = None # Mark as failed to load
+                    self.log_data_cache[log_id] = None 
                     return None
 
 
                 gt_df_with_intent = pd.read_feather(intent_annotation_file_path)
-                ego_poses_df = load_ego_poses(log_dir_path) # From utils.py
+                ego_poses_df = load_ego_poses(log_dir_path) 
 
                 map_api = None
-                if AV2_MAP_AVAILABLE: # Constant from constants.py
+                if AV2_MAP_AVAILABLE: 
                     map_base_path = log_dir_path / "map"
                     if map_base_path.is_dir() and any(map_base_path.iterdir()):
-                        from av2.map.map_api import ArgoverseStaticMap # Local import
+                        from av2.map.map_api import ArgoverseStaticMap
                         map_api = ArgoverseStaticMap.from_map_dir(map_base_path, build_raster=False)
 
                 self.log_data_cache[log_id] = {
                     "ego_poses": ego_poses_df,
-                    "gt_df": gt_df_with_intent, # This now includes 'heuristic_intent'
+                    "gt_df": gt_df_with_intent,
                     "map_api": map_api
                 }
-                # print(f"      -> Loaded and cached {log_id}") # Optional debug print
 
             except FileNotFoundError as fnf_err:
                 print(f"Error in _get_log_data (FileNotFound) for {log_id}: {fnf_err}")
@@ -268,10 +253,8 @@ class ArgoverseIntentNetDataset(Dataset):
                 print(f"Error loading data cache for log {log_id}: {e}")
                 traceback.print_exc()
                 self.log_data_cache[log_id] = None
-        # else:
-            # print(f"    CACHE HIT for log: {log_id}") # Optional debug print
 
-        return self.log_data_cache.get(log_id) # Returns None if log_id was not successfully cached
+        return self.log_data_cache.get(log_id) 
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -285,9 +268,8 @@ class ArgoverseIntentNetDataset(Dataset):
 
         sequence_info = self.sequences[idx]
         log_id = sequence_info["log_id"]
-        log_dir = sequence_info["log_dir"] # Already a string
-        map_json_path = sequence_info["map_json_path"] # Already a string
-        # annotations_path = sequence_info["annotations_path"] # Path to original, not pre-computed
+        log_dir = sequence_info["log_dir"] 
+        map_json_path = sequence_info["map_json_path"]
         current_ts_ns = sequence_info["current_ts_ns"]
         sweep_ts_list = sequence_info["sweep_ts_list"]
 
@@ -302,7 +284,6 @@ class ArgoverseIntentNetDataset(Dataset):
 
             current_ego_pose_row = ego_poses_df[ego_poses_df['timestamp_ns'] == current_ts_ns]
             if current_ego_pose_row.empty:
-                # print(f"Warning: Current ego pose not found for ts {current_ts_ns} in log {log_id}. Skipping item.")
                 return None
             current_ego_pose = current_ego_pose_row.iloc[0]
 
@@ -310,7 +291,7 @@ class ArgoverseIntentNetDataset(Dataset):
             qx, qy, qz, qw = current_ego_pose['qx'], current_ego_pose['qy'], current_ego_pose['qz'], current_ego_pose['qw']
             try:
                 rot_mat = R.from_quat([qx, qy, qz, qw]).as_matrix()
-            except ValueError: # Handle invalid quaternion
+            except ValueError: 
                 print(f"Warning: Invalid quaternion for ego pose at ts {current_ts_ns} in log {log_id}. Skipping item.")
                 return None
 
@@ -331,13 +312,13 @@ class ArgoverseIntentNetDataset(Dataset):
                     if sweep_df.empty:
                         points_list.append(None); intensity_list.append(None)
                         continue
-                except pyarrow.ArrowInvalid: # Catch specific error for corrupt feather files
+                except pyarrow.ArrowInvalid: 
                     print(f"Warning: Corrupt LiDAR sweep file: {sweep_path}. Skipping sweep.")
                     points_list.append(None); intensity_list.append(None)
                     continue
 
                 pts_world = sweep_df[['x', 'y', 'z']].values
-                intensity = sweep_df['intensity'].values.astype(np.float32) # Ensure intensity is float
+                intensity = sweep_df['intensity'].values.astype(np.float32)
 
                 sweep_pose_row = ego_poses_df[ego_poses_df['timestamp_ns'] == ts_sweep]
                 if sweep_pose_row.empty:
@@ -350,7 +331,7 @@ class ArgoverseIntentNetDataset(Dataset):
                     sw_rot = R.from_quat(sw_q).as_matrix()
                 except ValueError:
                     points_list.append(None); intensity_list.append(None)
-                    continue # Skip sweep if its pose is invalid
+                    continue 
 
                 sw_tf_world_ego = np.eye(4)
                 sw_tf_world_ego[:3,:3] = sw_rot
@@ -360,25 +341,19 @@ class ArgoverseIntentNetDataset(Dataset):
                 points_list.append(pts_curr_ego)
                 intensity_list.append(intensity)
 
-            if all(p is None for p in points_list): # If all sweeps failed to load
-                # print(f"Warning: All LiDAR sweeps failed to load for ts {current_ts_ns} in log {log_id}. Skipping item.")
+            if all(p is None for p in points_list): 
                 return None
 
             lidar_bev_np = create_intentnet_lidar_bev(points_list, intensity_list)
             map_bev_np = rasterize_map_ego_centric(map_json_path, current_ego_pose)
 
             frame_gt_dict = prepare_gt_for_frame(current_ts_ns, gt_df_with_intent, map_api)
-            # prepare_gt_for_frame now returns a default empty dict if no GT, so direct check is fine
-            # if frame_gt_dict is None:
-            #     frame_gt_dict = {'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
-            #                      'intentions': torch.empty((0,), dtype=torch.long)}
 
             if self.is_train:
                 lidar_bev_np, map_bev_np, frame_gt_dict = augment_bev(lidar_bev_np, map_bev_np, frame_gt_dict)
 
             final_lidar_bev = torch.from_numpy(lidar_bev_np).float()
             final_map_bev = torch.from_numpy(map_bev_np).float()
-            # Ensure GT tensors are on CPU before collate_fn (though they are created from numpy, so should be)
             final_gt_dict = {
                 'boxes_xywha': frame_gt_dict['boxes_xywha'].float(),
                 'intentions': frame_gt_dict['intentions'].long()
@@ -386,7 +361,6 @@ class ArgoverseIntentNetDataset(Dataset):
             return {"lidar_bev": final_lidar_bev, "map_bev": final_map_bev, "gt": final_gt_dict}
 
         except Exception as e:
-            # Print more context for debugging
             print(f"!!! UNHANDLED ERROR in __getitem__ for index {idx}, log_id {log_id}, timestamp {current_ts_ns} !!!")
             print(f"Sequence Info: {self.sequences[idx] if idx < len(self.sequences) else 'Index out of bounds in error handler'}")
             traceback.print_exc()

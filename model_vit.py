@@ -16,7 +16,7 @@ def conv3x3_for_basic(in_planes: int, out_planes: int, stride: int = 1, kernel_s
 def conv1x1_for_basic(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
-class BasicBlock(nn.Module): # Copied from your CNN code
+class BasicBlock(nn.Module):
     expansion: int = 1
     def __init__(self, inplanes: int, planes: int, stride: int = 1, downsample: nn.Module | None = None, kernel_size: int = 3):
         super().__init__()
@@ -59,16 +59,14 @@ class TwoStreamViTBackbone(nn.Module):
         self.lidar_adapter_out_channels = lidar_adapter_out_channels
         self.map_adapter_out_channels = map_adapter_out_channels
 
-        # LiDAR Stream ViT
-        with warnings.catch_warnings(): # ... (same as before) ...
+        with warnings.catch_warnings(): 
             warnings.simplefilter("ignore", UserWarning)
             self.vit_lidar = timm.create_model(vit_model_name_lidar, pretrained=pretrained_lidar, in_chans=lidar_input_channels, img_size=self.img_size, drop_path_rate=drop_path_rate_lidar)
         self.vit_lidar.head = nn.Identity(); self.lidar_embed_dim = self.vit_lidar.embed_dim
         self.lidar_num_prefix_tokens = getattr(self.vit_lidar, 'num_prefix_tokens', 1 if hasattr(self.vit_lidar, 'cls_token') and self.vit_lidar.cls_token is not None else 0)
         self.lidar_grid_size, _ = self._get_patch_info(self.vit_lidar, "LiDAR")
 
-        # Map Stream ViT
-        with warnings.catch_warnings(): # ... (same as before) ...
+        with warnings.catch_warnings(): 
             warnings.simplefilter("ignore", UserWarning)
             self.vit_map = timm.create_model(vit_model_name_map, pretrained=pretrained_map, in_chans=map_input_channels, img_size=self.img_size, drop_path_rate=drop_path_rate_map)
         self.vit_map.head = nn.Identity(); self.map_embed_dim = self.vit_map.embed_dim
@@ -85,15 +83,14 @@ class TwoStreamViTBackbone(nn.Module):
         self.adapter_map = nn.Sequential(nn.LayerNorm(self.map_embed_dim), nn.Linear(self.map_embed_dim, self.map_adapter_out_channels), nn.GELU())
             
         self.fusion_input_channels = self.lidar_adapter_out_channels + self.map_adapter_out_channels
-        self.fusion_block_stride = fusion_block_stride # Store for calculating final stride
+        self.fusion_block_stride = fusion_block_stride 
         
         self.fusion_block = self._make_fusion_layer(res_block_type, fusion_block_planes, fusion_block_layers,
-                                             stride=self.fusion_block_stride, # Will be 1 if default is used or 1 is passed
+                                             stride=self.fusion_block_stride, 
                                              current_inplanes=self.fusion_input_channels,
                                              kernel_size_for_block=fusion_block_kernel_size)
         self.final_feature_channels = fusion_block_planes * res_block_type.expansion
         
-        # ... (print statements can remain or be updated based on final stride) ...
         print(f"TwoStreamViTBackbone Initialized:")
         print(f"  LiDAR ViT: {vit_model_name_lidar}, Adapter Out: {self.lidar_adapter_out_channels}")
         print(f"  Map ViT: {vit_model_name_map}, Adapter Out: {self.map_adapter_out_channels}")
@@ -101,7 +98,7 @@ class TwoStreamViTBackbone(nn.Module):
         print(f"  Fusion Block: Stride {self.fusion_block_stride}, Output {self.final_feature_channels} channels")
 
 
-    def _get_patch_info(self, vit_model: nn.Module, stream_name: str = "") -> tuple[tuple[int, int] | None, int]: # No change
+    def _get_patch_info(self, vit_model: nn.Module, stream_name: str = "") -> tuple[tuple[int, int] | None, int]: 
         grid_size, num_patches = None, 0
         try:
             patch_embed = vit_model.patch_embed
@@ -116,9 +113,9 @@ class TwoStreamViTBackbone(nn.Module):
         except AttributeError: print(f"Error ({stream_name}): Could not access patch_embed attributes.")
         return grid_size, num_patches
 
-    def _process_stream(self, x: torch.Tensor, vit_stream: nn.Module, # No change
+    def _process_stream(self, x: torch.Tensor, vit_stream: nn.Module,
                         num_prefix_tokens: int, grid_size: tuple[int, int] | None,
-                        adapter: nn.Module, stream_name: str) -> torch.Tensor | None: # ... (same implementation) ...
+                        adapter: nn.Module, stream_name: str) -> torch.Tensor | None: 
         tokens_all = vit_stream.forward_features(x); patch_tokens = tokens_all[:, num_prefix_tokens:]
         adapted_tokens = adapter(patch_tokens); B, N, C = adapted_tokens.shape
         if grid_size and N == grid_size[0] * grid_size[1]: Hf, Wf = grid_size; return adapted_tokens.permute(0, 2, 1).contiguous().view(B, C, Hf, Wf)
@@ -134,7 +131,7 @@ class TwoStreamViTBackbone(nn.Module):
         for _ in range(1, num_blocks): layers.append(block(inplanes_for_rest_of_blocks, planes, kernel_size=kernel_size_for_block))
         return nn.Sequential(*layers)
 
-    def forward(self, lidar_bev: torch.Tensor, map_bev: torch.Tensor) -> torch.Tensor: # No change in logic
+    def forward(self, lidar_bev: torch.Tensor, map_bev: torch.Tensor) -> torch.Tensor: 
         lidar_feature_map = self._process_stream(lidar_bev, self.vit_lidar, self.lidar_num_prefix_tokens, self.lidar_grid_size, self.adapter_lidar, "LiDAR")
         if lidar_feature_map is None: return torch.zeros(lidar_bev.shape[0], self.final_feature_channels, self.feature_map_grid_h or 1, self.feature_map_grid_w or 1, device=lidar_bev.device)
         map_feature_map = self._process_stream(map_bev, self.vit_map, self.map_num_prefix_tokens, self.map_grid_size, self.adapter_map, "Map")
@@ -150,17 +147,16 @@ class IntentNetViT(nn.Module):
         super().__init__()
         if backbone_cfg is None: backbone_cfg = {}
         backbone_cfg.setdefault('vit_model_name_lidar', 'vit_small_patch8_224')
-        backbone_cfg.setdefault('vit_model_name_map', 'vit_small_patch8_224') # MODIFICATION: Changed map model
+        backbone_cfg.setdefault('vit_model_name_map', 'vit_small_patch8_224') 
         backbone_cfg.setdefault('pretrained_lidar', False)
         backbone_cfg.setdefault('pretrained_map', False)
         backbone_cfg.setdefault('img_size', (GRID_HEIGHT_PX, GRID_WIDTH_PX))
         backbone_cfg.setdefault('lidar_adapter_out_channels', 192)
         backbone_cfg.setdefault('map_adapter_out_channels', 192) 
-        # Fusion block defaults
         backbone_cfg.setdefault('fusion_block_planes', 512)
         backbone_cfg.setdefault('fusion_block_layers', 2)
         backbone_cfg.setdefault('fusion_block_kernel_size', 3)
-        backbone_cfg.setdefault('fusion_block_stride', 1) # MODIFICATION: Set fusion_block_stride to 1
+        backbone_cfg.setdefault('fusion_block_stride', 1) 
 
         self.backbone = TwoStreamViTBackbone(**backbone_cfg)
         feature_channels = self.backbone.final_feature_channels
@@ -170,15 +166,13 @@ class IntentNetViT(nn.Module):
         self.intention_head = IntentionHead(in_channels=feature_channels, num_classes=NUM_INTENTION_CLASSES, **head_cfg)
         
         print(f"IntentNetViT Heads Initialized. Input Channels: {feature_channels}")
-        # Calculate and print the effective stride for the heads
-        # Assuming patch size is in the name like '..._patch8_...'
         try:
             vit_patch_stride = int(backbone_cfg.get('vit_model_name_lidar', 'vit_small_patch8_224').split('_patch')[-1].split('_')[0])
         except ValueError:
-            vit_patch_stride = 8 # Fallback if parsing fails
+            vit_patch_stride = 8 
             print(f"Warning: Could not parse patch stride from ViT name, defaulting to {vit_patch_stride}.")
             
-        fusion_stride = backbone_cfg.get('fusion_block_stride', 1) # Get the actual stride used
+        fusion_stride = backbone_cfg.get('fusion_block_stride', 1) 
         self.effective_head_stride = vit_patch_stride * fusion_stride
         print(f"  Effective total stride before heads: {self.effective_head_stride}x")
 

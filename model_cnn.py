@@ -39,7 +39,6 @@ class CNNBackbone(nn.Module):
     def __init__(self, block: type[BasicBlock] = BasicBlock,
                  lidar_input_channels: int = LIDAR_TOTAL_CHANNELS,
                  map_input_channels: int = MAP_CHANNELS,
-                 # Channel counts from IntentNet paper
                  lidar_s1_planes: int = 160,
                  lidar_s2_planes: int = 192,
                  lidar_s3_planes: int = 224,
@@ -49,14 +48,12 @@ class CNNBackbone(nn.Module):
                  fusion_block_planes: int = 512,
                  fusion_block_layers: int = 2,
                  num_blocks_per_stage: int = 2,
-                 res_block2_kernel_size: int = 5, # Paper uses k5 for Res_block_2 stages
-                 fusion_block_kernel_size: int = 3 # Paper uses k3 for Res_block_3
+                 res_block2_kernel_size: int = 5, 
+                 fusion_block_kernel_size: int = 3 
                  ):
         super().__init__()
         self.block = block
 
-        # LiDAR Stream
-        # No initial conv. Input to stage1 is raw lidar_bev.
         current_lidar_inplanes = lidar_input_channels
         self.lidar_stage1 = self._make_layer(block, lidar_s1_planes, num_blocks_per_stage, stride=2, current_inplanes=current_lidar_inplanes, kernel_size_for_block=res_block2_kernel_size)
         current_lidar_inplanes = lidar_s1_planes * block.expansion
@@ -65,8 +62,6 @@ class CNNBackbone(nn.Module):
         self.lidar_stage3 = self._make_layer(block, lidar_s3_planes, num_blocks_per_stage, stride=2, current_inplanes=current_lidar_inplanes, kernel_size_for_block=res_block2_kernel_size)
         self.lidar_output_channels = lidar_s3_planes * block.expansion
 
-        # Map Stream
-        # No initial conv. Input to stage1 is raw map_bev.
         current_map_inplanes = map_input_channels
         self.map_stage1 = self._make_layer(block, map_s1_planes, num_blocks_per_stage, stride=2, current_inplanes=current_map_inplanes, kernel_size_for_block=res_block2_kernel_size)
         current_map_inplanes = map_s1_planes * block.expansion
@@ -75,9 +70,7 @@ class CNNBackbone(nn.Module):
         self.map_stage3 = self._make_layer(block, map_s3_planes, num_blocks_per_stage, stride=2, current_inplanes=current_map_inplanes, kernel_size_for_block=res_block2_kernel_size)
         self.map_output_channels = map_s3_planes * block.expansion
 
-        # Fusion Subnetwork (Res_block_3 in paper)
         self.fusion_inplanes = self.lidar_output_channels + self.map_output_channels
-        # This block downsamples by /2 and outputs fusion_block_planes channels
         self.fusion_block = self._make_layer(block, fusion_block_planes, fusion_block_layers, stride=2, current_inplanes=self.fusion_inplanes, kernel_size_for_block=fusion_block_kernel_size)
         self.final_feature_channels = fusion_block_planes * block.expansion
 
@@ -115,18 +108,17 @@ class CNNBackbone(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, lidar_bev: torch.Tensor, map_bev: torch.Tensor) -> torch.Tensor:
-        l_feat = self.lidar_stage1(lidar_bev)   # Input: B x LidarCh x H_in x W_in
+        l_feat = self.lidar_stage1(lidar_bev)  
         l_feat = self.lidar_stage2(l_feat)
-        l_feat = self.lidar_stage3(l_feat)      # Output: B x 224 x H_in/4 x W_in/4
+        l_feat = self.lidar_stage3(l_feat)    
 
-        m_feat = self.map_stage1(map_bev)       # Input: B x MapCh x H_in x W_in
+        m_feat = self.map_stage1(map_bev)       
         m_feat = self.map_stage2(m_feat)
-        m_feat = self.map_stage3(m_feat)        # Output: B x 96 x H_in/4 x W_in/4
+        m_feat = self.map_stage3(m_feat)        
 
-        fused_feat_pre_block3 = torch.cat([l_feat, m_feat], dim=1) # Output: B x 320 x H_in/4 x W_in/4
+        fused_feat_pre_block3 = torch.cat([l_feat, m_feat], dim=1) 
         
-        # Pass through the shared fusion block (Res_block_3 equivalent)
-        final_features = self.fusion_block(fused_feat_pre_block3)  # Output: B x 512 x H_in/8 x W_in/8
+        final_features = self.fusion_block(fused_feat_pre_block3) 
         
         return final_features
 
@@ -145,15 +137,11 @@ class IntentNetCNN(nn.Module):
         print(f"IntentNetCNN (Paper Fig2c Aligned Downsampling) Heads Initialized. Input Channels: {feature_channels}")
 
     def forward(self, lidar_bev: torch.Tensor, map_bev: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # features: B x 512 x H_in/8 x W_in/8
         features = self.backbone(lidar_bev, map_bev)
         
         det_cls_logits, det_box_preds_rel = self.det_head(features)
         intention_logits = self.intention_head(features)
 
-        # Flatten outputs for the loss function.
-        # Assumes heads output (B, H_feat, W_feat, Num_Anchors_x_Values)
-        # and need to be reshaped to (B, NumTotalAnchors, Values_per_Anchor).
         B = features.shape[0]
         
         det_cls_logits = det_cls_logits.reshape(B, -1, 1) 

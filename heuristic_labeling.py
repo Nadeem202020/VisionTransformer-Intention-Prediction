@@ -1,12 +1,11 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-import pandas as pd # Added for type hinting all_log_gt_boxes_df
+import pandas as pd 
 
 from constants import (INTENTIONS_MAP, INTENTION_HORIZON_STEPS, MIN_SPEED_STOPPED,
                        MIN_SPEED_MOVING, HEADING_CHANGE_THRESH_TURN,
                        HEADING_CHANGE_THRESH_LANE_KEEP, PARKED_MAX_DISP_M,
                        KEEP_LANE_MAX_LAT_DIST_FALLBACK, AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE)
-# Note: map_search_radius is a default argument in the function, not from constants.py
 
 def get_vehicle_intention_heuristic_enhanced(
     track_id: str,
@@ -19,7 +18,7 @@ def get_vehicle_intention_heuristic_enhanced(
     moving_speed_thresh: float = MIN_SPEED_MOVING,
     turn_heading_thresh_rad: float = HEADING_CHANGE_THRESH_TURN,
     keep_heading_thresh_rad: float = HEADING_CHANGE_THRESH_LANE_KEEP,
-    map_search_radius: float = 5.0, # Default value, not from constants
+    map_search_radius: float = 5.0, 
     parked_max_disp_m: float = PARKED_MAX_DISP_M,
     keep_lane_max_lat_dist_fallback: float = KEEP_LANE_MAX_LAT_DIST_FALLBACK
     ) -> int:
@@ -57,7 +56,7 @@ def get_vehicle_intention_heuristic_enhanced(
 
     map_context_available = False
     is_intersection = False
-    best_lane_id_for_context = None # Define for potential use in shapely check
+    best_lane_id_for_context = None 
 
     if AV2_MAP_AVAILABLE and static_map is not None:
         try:
@@ -92,8 +91,8 @@ def get_vehicle_intention_heuristic_enhanced(
         can_check_polygons_shapely = False
         points_stay_in_valid_lanes_shapely = False
         if SHAPELY_AVAILABLE and map_context_available and not is_intersection and static_map is not None:
-            current_lane_id_for_shapely = best_lane_id_for_context # Use previously found closest lane
-            if current_lane_id_for_shapely is None: # If not found before, try again
+            current_lane_id_for_shapely = best_lane_id_for_context
+            if current_lane_id_for_shapely is None: 
                 temp_nearby_info = static_map.get_nearby_lane_segments(start_pos_xy, map_search_radius)
                 if temp_nearby_info:
                     min_d = float('inf');
@@ -112,11 +111,11 @@ def get_vehicle_intention_heuristic_enhanced(
                         future_points_geom = [Point(p_xy) for p_xy in future_track[['tx_m', 'ty_m']].values]
                         points_stay_in_valid_lanes_shapely = all(
                             any(shapely_contains(poly, pt)) for poly in valid_lane_polys for pt in future_points_geom)
-                except Exception: pass # Defaults remain False
+                except Exception: pass
 
         if can_check_polygons_shapely and points_stay_in_valid_lanes_shapely:
             return INTENTIONS_MAP["KEEP_LANE"]
-        elif not can_check_polygons_shapely: # Fallback if shapely check not possible or failed
+        elif not can_check_polygons_shapely: 
             start_vec_xy = np.array([np.cos(start_heading_rad), np.sin(start_heading_rad)])
             lateral_dist_xy = np.linalg.norm(displacement_xy - np.dot(displacement_xy, start_vec_xy) * start_vec_xy)
             if lateral_dist_xy < keep_lane_max_lat_dist_fallback:

@@ -1,74 +1,63 @@
 import torch
-# import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-# import timm # Not directly used in this script
 
-# Project-specific imports
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES, ANCHOR_CONFIGS_PAPER,
                        AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO)
 from dataset import ArgoverseIntentNetDataset, collate_fn
-from model_vit import IntentNetViT, BasicBlock # Renamed model
+from model_vit import IntentNetViT, BasicBlock 
 from loss import DetectionIntentionLoss
 from utils import generate_anchors
 
 if __name__ == '__main__':
-    # --- Configuration ---
-    # USER_CONFIG: Update this path to your Argoverse 2 training data
-    TRAIN_DATA_DIR = "./data/argoverse2/sensor/train" # Example placeholder
-    # USER_CONFIG: Directory to save model checkpoints
-    MODEL_SAVE_DIR_VIT = "./trained_models_vit" # Changed from final_models
+    TRAIN_DATA_DIR = "./data/argoverse2/sensor/train" 
+    MODEL_SAVE_DIR_VIT = "./trained_models_vit" 
 
-    # Training Hyperparameters
     TRAIN_BATCH_SIZE = 8
     NUM_WORKERS = 0
     LEARNING_RATE = 1e-4
     WEIGHT_DECAY = 1e-4
     NUM_EPOCHS = 10
 
-    # Model & Loss Configuration
     USE_ROTATED_IOU = False
     APPLY_INTENTION_DOWNSAMPLING = True
-    USE_INTENTION_WEIGHTS = False # If False, class_weights from data are not used by loss_fn
+    USE_INTENTION_WEIGHTS = False # 
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    VIT_IMG_SIZE = (GRID_HEIGHT_PX, GRID_WIDTH_PX) # e.g., (224,224) or (720,400)
+    VIT_IMG_SIZE = (GRID_HEIGHT_PX, GRID_WIDTH_PX) 
 
     VIT_BACKBONE_CFG = {
         'lidar_input_channels': LIDAR_TOTAL_CHANNELS,
         'map_input_channels': MAP_CHANNELS,
         'vit_model_name_lidar': 'vit_small_patch8_224', 
         'vit_model_name_map': 'vit_small_patch8_224',   
-        'pretrained_lidar': False, # Set to True to use timm's pretrained weights (if available and compatible)
+        'pretrained_lidar': False, 
         'pretrained_map': False,
-        'img_size': VIT_IMG_SIZE, # Crucial: must match input tensor size to ViT
+        'img_size': VIT_IMG_SIZE,
         'drop_path_rate_lidar': 0.1,
         'drop_path_rate_map': 0.1,
-        'lidar_adapter_out_channels': 192, # ViT Small embed_dim is 384, Tiny is 192. Adapter can change this.
-        'map_adapter_out_channels': 192,   # This example uses 192, adjust based on your ViT and adapter.
-        'fusion_block_planes': 512,        # Channels after fusion ResBlocks
-        'fusion_block_layers': 2,          # Number of ResBlocks in fusion
+        'lidar_adapter_out_channels': 192, 
+        'map_adapter_out_channels': 192,   
+        'fusion_block_planes': 512,        
+        'fusion_block_layers': 2,         
         'fusion_block_kernel_size': 3,
-        'fusion_block_stride': 1,          # Keep 1 if ViT patch already gives 8x
+        'fusion_block_stride': 1,          
         'res_block_type': BasicBlock
     }
     try:
-        # Assumes vit_model_name_lidar is like '..._patch<N>_...'
         vit_patch_stride_val = int(VIT_BACKBONE_CFG['vit_model_name_lidar'].split('_patch')[-1].split('_')[0])
     except ValueError:
-        vit_patch_stride_val = 8 # Default if parsing fails
+        vit_patch_stride_val = 8 
         print(f"Warning: Could not parse patch stride from ViT name, defaulting to {vit_patch_stride_val}.")
     FEATURE_MAP_STRIDE_VIT = vit_patch_stride_val * VIT_BACKBONE_CFG.get('fusion_block_stride', 1)
 
     print(f"--- ViT Training Configuration ---")
     print(f"Device: {DEVICE}")
     print(f"Training Data Directory: {TRAIN_DATA_DIR}")
-    # print(f"AV2 Map API Available: {AV2_MAP_AVAILABLE}") # Printed by constants.py
-    # print(f"Shapely Available: {SHAPELY_AVAILABLE}")   # Printed by constants.py
     print(f"BEV Image Size for ViT: {VIT_IMG_SIZE}")
     print(f"Using Rotated IoU: {USE_ROTATED_IOU}")
     print(f"Batch Size: {TRAIN_BATCH_SIZE}, Num Epochs: {NUM_EPOCHS}, LR: {LEARNING_RATE}")
@@ -76,13 +65,11 @@ if __name__ == '__main__':
     print(f"Apply Intention Downsampling: {APPLY_INTENTION_DOWNSAMPLING}")
     print(f"---------------------------------")
 
-    # --- Validate Data Path ---
     train_data_path = Path(TRAIN_DATA_DIR)
     if not train_data_path.is_dir():
         print(f"ERROR: Training data directory not found: {TRAIN_DATA_DIR}")
         exit()
 
-    # --- Create Dataset & DataLoader ---
     print("\nInitializing training dataset...")
     try:
         train_dataset = ArgoverseIntentNetDataset(data_dir=TRAIN_DATA_DIR, is_train=True)
@@ -98,9 +85,7 @@ if __name__ == '__main__':
         print(f"ERROR initializing training dataset/loader: {e}")
         exit()
 
-    # --- Calculate Intention Class Weights (Optional) ---
     intention_weights_tensor = None
-    # (Identical weight calculation logic as in train_cnn.py - can be refactored into a utility if desired)
     if USE_INTENTION_WEIGHTS and APPLY_INTENTION_DOWNSAMPLING:
         print("Warning: Both USE_INTENTION_WEIGHTS and APPLY_INTENTION_DOWNSAMPLING are True. "
               "Downsampling will be applied; explicit weights will be ignored by the loss function.")
@@ -130,9 +115,8 @@ if __name__ == '__main__':
             print("Warning: No intention labels found in training data. Cannot calculate class weights.")
     print("---------------------------------")
 
-    # --- Initialize Model, Loss, Optimizer ---
     print("\nInitializing ViT Model, Loss Function, and Optimizer...")
-    model = IntentNetViT(backbone_cfg=VIT_BACKBONE_CFG).to(DEVICE) # Use renamed class
+    model = IntentNetViT(backbone_cfg=VIT_BACKBONE_CFG).to(DEVICE) 
 
     loss_cfg_weights = intention_weights_tensor if USE_INTENTION_WEIGHTS and not APPLY_INTENTION_DOWNSAMPLING else None
     loss_fn = DetectionIntentionLoss(
@@ -146,20 +130,17 @@ if __name__ == '__main__':
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=False)
 
-    # --- Generate Anchors ---
     print("\nGenerating anchors...")
     anchors = generate_anchors(
-        bev_height=GRID_HEIGHT_PX, # Corrected parameter name
-        bev_width=GRID_WIDTH_PX,   # Corrected parameter name
+        bev_height=GRID_HEIGHT_PX, 
+        bev_width=GRID_WIDTH_PX,  
         feature_map_stride=FEATURE_MAP_STRIDE_VIT,
-        anchor_configs=ANCHOR_CONFIGS_PAPER # Using the paper's W,L,R configs
+        anchor_configs=ANCHOR_CONFIGS_PAPER 
     ).to(DEVICE)
     print(f"Anchors generated (stride {FEATURE_MAP_STRIDE_VIT}), shape: {anchors.shape}")
     print("---------------------------------")
 
-    # --- Training Loop ---
     print("\n--- Starting ViT Training ---")
-    # (Training loop is identical to train_cnn.py, just uses 'model' which is the ViT model here)
     for epoch in range(NUM_EPOCHS):
         model.train()
         epoch_loss_accum = 0.0
@@ -219,7 +200,6 @@ if __name__ == '__main__':
 
     print("\n--- ViT Training Finished ---")
 
-    # Save the final ViT model
     save_dir = Path(MODEL_SAVE_DIR_VIT) 
     save_dir.mkdir(parents=True, exist_ok=True) 
     final_model_path = save_dir / "vit_model.pth" 

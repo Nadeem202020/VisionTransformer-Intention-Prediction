@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-# Assuming constants.py is in the same root directory
 from constants import NUM_ANCHORS_PER_LOC, NUM_INTENTION_CLASSES
 
 class DetectionHead(nn.Module):
@@ -12,7 +11,7 @@ class DetectionHead(nn.Module):
     def __init__(self, in_channels: int, num_anchors: int = NUM_ANCHORS_PER_LOC):
         super().__init__()
         self.num_anchors = num_anchors
-        num_box_params = 6  # cx, cy, w, l, sin(yaw_diff), cos(yaw_diff)
+        num_box_params = 6  
         num_outputs = self.num_anchors * (1 + num_box_params)
         self.conv = nn.Conv2d(in_channels, num_outputs, kernel_size=3, padding=1)
 

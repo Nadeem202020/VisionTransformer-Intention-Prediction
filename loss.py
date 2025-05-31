@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import sigmoid_focal_loss
-
 from constants import DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO
 from utils import compute_axis_aligned_iou, compute_rotated_iou
 
@@ -81,14 +80,6 @@ class DetectionIntentionLoss(nn.Module):
 
             iou_func = compute_rotated_iou if self.use_rotated_iou else compute_axis_aligned_iou
             current_anchors = anchors
-            # Note: If using axis_aligned_iou, ensure current_anchors and gt_boxes_item are in xyxy or compatible format.
-            # This logic might need to be adapted based on your specific IoU function inputs.
-            # e.g., if anchors are [xc,yc,w,h,a] and AA IoU needs [x1,y1,x2,y2]:
-            # if not self.use_rotated_iou:
-            #     anchors_xyxy = convert_xywha_to_xyxy(current_anchors) # Implement this conversion
-            #     gt_boxes_item_xyxy = convert_xywha_to_xyxy(gt_boxes_item) # Implement this
-            #     iou_args = (anchors_xyxy, gt_boxes_item_xyxy)
-            # else:
             iou_args = (current_anchors, gt_boxes_item)
 
             try:
@@ -104,15 +95,14 @@ class DetectionIntentionLoss(nn.Module):
 
             pos_mask_item = max_iou_per_anchor >= self.iou_threshold
             cls_targets[b, pos_mask_item] = 1
-            # assigned_gt_indices_for_pos_anchors = max_iou_gt_idx_per_anchor[pos_mask_item] # Will be set later with final_pos_mask_item
 
             if num_gt > 0:
                  _, max_iou_anchor_idx_per_gt = iou_matrix.max(dim=0)
                  for gt_idx_force in range(num_gt):
                     anchor_idx_force = max_iou_anchor_idx_per_gt[gt_idx_force]
                     if not pos_mask_item[anchor_idx_force] and iou_matrix[anchor_idx_force, gt_idx_force] >= self.neg_iou_threshold:
-                        pos_mask_item[anchor_idx_force] = True # Update local pos_mask_item
-                        cls_targets[b, anchor_idx_force] = 1   # Update targets directly
+                        pos_mask_item[anchor_idx_force] = True 
+                        cls_targets[b, anchor_idx_force] = 1  
 
             final_pos_mask_item = (cls_targets[b, :] == 1)
             assigned_gt_indices_for_pos_anchors = max_iou_gt_idx_per_anchor[final_pos_mask_item]
@@ -182,7 +172,7 @@ class DetectionIntentionLoss(nn.Module):
                         for dominant_idx in self.dominant_intentions:
                             is_dominant_target_mask = (intent_targets_pos == dominant_idx)
                             if is_dominant_target_mask.any():
-                                num_dominant_samples = is_dominant_target_mask.sum().item() # Ensure scalar for torch.rand
+                                num_dominant_samples = is_dominant_target_mask.sum().item() 
                                 random_numbers_for_dominant = torch.rand(num_dominant_samples, device=device)
                                 keep_mask_for_dominant = random_numbers_for_dominant < self.intention_downsample_keep_prob
                                 downsample_mask[is_dominant_target_mask] = keep_mask_for_dominant.float()
@@ -204,7 +194,7 @@ class DetectionIntentionLoss(nn.Module):
                 "cls_loss": torch.tensor(0.0, device=device),
                 "box_loss": torch.tensor(0.0, device=device),
                 "intent_loss": torch.tensor(0.0, device=device),
-                "num_pos_anchors": num_pos_total_batch.item() # Ensure scalar
+                "num_pos_anchors": num_pos_total_batch.item()
             }
 
         return {
@@ -212,5 +202,5 @@ class DetectionIntentionLoss(nn.Module):
             "cls_loss": cls_loss.detach(),
             "box_loss": box_loss.detach(),
             "intent_loss": intent_loss.detach(),
-            "num_pos_anchors": num_pos_total_batch.item() # Ensure scalar
+            "num_pos_anchors": num_pos_total_batch.item()
         }

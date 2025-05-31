@@ -1,42 +1,33 @@
 import torch
-# import torch.nn as nn # Not strictly needed by this script
-# import torch.nn.functional as F # Not strictly needed by this script
 import numpy as np
-# import pandas as pd # Not directly used unless saving results to CSV/Feather
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score
-# import matplotlib.pyplot as plt # Uncomment if you add plotting
 from pathlib import Path
-# import os # Not directly used
-# import traceback # Typically for debugging, can be removed for cleaner script
-import torchvision # For torchvision.ops.nms
+import torchvision 
 from torch.utils.data import DataLoader
 
-# Project-specific imports (assuming all .py files are in the same root directory)
+
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES,
                        ANCHOR_CONFIGS_PAPER, AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
-                       INTENTIONS_MAP_REV, LIDAR_TOTAL_CHANNELS, MAP_CHANNELS) # Added missing constants
+                       INTENTIONS_MAP_REV, LIDAR_TOTAL_CHANNELS, MAP_CHANNELS)
 from dataset import ArgoverseIntentNetDataset, collate_fn
-from model_cnn import IntentNetCNN, BasicBlock # For CNN eval
-# from model_vit import IntentNetDetectorIntentionTwoStreamViT # For ViT eval (in eval_vit.py)
+from model_cnn import IntentNetCNN, BasicBlock
 from utils import (generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou, compute_rotated_iou, calculate_ap)
 
-# --- Script Configuration ---
-# USER_CONFIG: Update these paths as necessary
-VAL_DATA_DIR = "path/to/your/argoverse2/sensor/val" # Placeholder - User must set this
-MODEL_SAVE_PATH_CNN = "./trained_models_cnn/cnn_model.pth" # Example path
 
-# Evaluation Hyperparameters
+VAL_DATA_DIR = "path/to/your/argoverse2/sensor/val" 
+MODEL_SAVE_PATH_CNN = "./trained_models_cnn/cnn_model.pth" 
+
+
 CONFIDENCE_THRESHOLD = 0.1
 NMS_IOU_THRESHOLD = 0.2
-INFERENCE_BATCH_SIZE = 8 # Adjust based on GPU memory
-NUM_WORKERS_EVAL = 0     # For DataLoader
-DETECTION_IOU_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9] # For mAP calculation
-IOU_THRESHOLD_FOR_INTENTION_MATCH = 0.5             # For matching detections to GT for intention eval
-FEATURE_MAP_STRIDE_CNN = 8                          # Specific to CNN architecture
-EVAL_USE_ROTATED_IOU = False # Default to False (axis-aligned)
+INFERENCE_BATCH_SIZE = 8 
+NUM_WORKERS_EVAL = 0     
+DETECTION_IOU_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9] 
+IOU_THRESHOLD_FOR_INTENTION_MATCH = 0.5             
+FEATURE_MAP_STRIDE_CNN = 8                          
+EVAL_USE_ROTATED_IOU = False 
 
-# Runtime Device Setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def main_eval_cnn():
@@ -54,15 +45,12 @@ def main_eval_cnn():
         print("WARNING: EVAL_USE_ROTATED_IOU is True, but Shapely is not available. "
               "Falling back to axis-aligned IoU.")
 
-    # ... (Validate Data Path - no change) ...
     val_data_path = Path(VAL_DATA_DIR)
     if not val_data_path.is_dir():
         print(f"ERROR: Evaluation data directory not found: {VAL_DATA_DIR}")
         print("Please update the VAL_DATA_DIR variable in this script.")
         return
 
-    # --- Load Trained CNN Model ---
-    # ... (no change in loading logic) ...
     print(f"\n--- Loading TRAINED CNN Model for Evaluation ---")
     print(f"Model Path: {MODEL_SAVE_PATH_CNN}")
 
@@ -88,7 +76,6 @@ def main_eval_cnn():
         }
 
     try:
-        # Corrected model instantiation name
         model_to_evaluate_cnn = IntentNetCNN(backbone_cfg=loaded_cnn_backbone_cfg).to(DEVICE)
         print("CNN Model structure instantiated successfully.")
     except Exception as e:
@@ -111,8 +98,6 @@ def main_eval_cnn():
     print("--------------------")
 
 
-    # --- Prepare DataLoader and Anchors for CNN Evaluation ---
-    # ... (no change in DataLoader and Anchor generation) ...
     print("\n--- Preparing Evaluation DataLoader (for CNN) ---")
     try:
         eval_dataset_cnn = ArgoverseIntentNetDataset(data_dir=VAL_DATA_DIR, is_train=False)
@@ -144,8 +129,6 @@ def main_eval_cnn():
         return
 
 
-    # --- Run Inference Loop with the LOADED (TRAINED) CNN Model ---
-    # ... (no change in inference loop) ...
     print("\n--- Running Inference with LOADED CNN Model ---")
     all_sample_results_cnn = []
     with torch.inference_mode():
@@ -176,9 +159,8 @@ def main_eval_cnn():
                         cls_logits_sample = det_cls_logits[b_idx]
                         box_preds_rel_sample = det_box_preds_rel[b_idx]
                         int_logits_sample = int_logits[b_idx]
-                        scores_sample = torch.sigmoid(cls_logits_sample) # Sigmoid for objectness
+                        scores_sample = torch.sigmoid(cls_logits_sample)
                         
-                        # Flatten scores if they are not already [NumAnchors]
                         if scores_sample.ndim > 1:
                             scores_sample = scores_sample.squeeze(-1) 
 
@@ -214,23 +196,21 @@ def main_eval_cnn():
     print(f"Collected results for {len(all_sample_results_cnn)} samples using TRAINED CNN model.")
 
 
-    # --- Detection Evaluation (mAP) for CNN ---
     print("\n--- Calculating Detection mAP for TRAINED CNN Model ---")
     average_precisions_per_iou_cnn = {iou_thresh: [] for iou_thresh in DETECTION_IOU_THRESHOLDS}
     if not all_sample_results_cnn:
         print("WARNING: 'all_sample_results_cnn' is empty. Cannot calculate mAP.")
     else:
-        # Determine which IoU function to use based on the flag
         iou_func_for_eval = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
         if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
-             iou_func_for_eval = compute_axis_aligned_iou # Fallback already handled by compute_rotated_iou, but explicit here too
+             iou_func_for_eval = compute_axis_aligned_iou 
         
         print(f"  Using IoU function for mAP: {iou_func_for_eval.__name__}")
 
         for sample_result in tqdm(all_sample_results_cnn, desc="Calculating AP per sample (CNN)", unit="sample"):
             pred_scores = sample_result['pred_scores']
-            pred_boxes = sample_result['pred_boxes_xywha'] # These are [cx, cy, w, l, angle_rad]
-            gt_boxes = sample_result['gt_boxes_xywha']   # These are [cx, cy, w, l, angle_rad]
+            pred_boxes = sample_result['pred_boxes_xywha']
+            gt_boxes = sample_result['gt_boxes_xywha'] 
             num_gt = gt_boxes.shape[0]
             num_pred = pred_boxes.shape[0]
 
@@ -245,13 +225,12 @@ def main_eval_cnn():
                 sort_idx = torch.argsort(pred_scores, descending=True)
                 pred_boxes_sorted = pred_boxes[sort_idx]
 
-                # Use the selected IoU function
                 if iou_func_for_eval == compute_rotated_iou:
                     iou_matrix = iou_func_for_eval(pred_boxes_sorted.float(), gt_boxes.float())
-                else: # compute_axis_aligned_iou
+                else: 
                     iou_matrix = iou_func_for_eval(pred_boxes_sorted[:, :4].float(), gt_boxes[:, :4].float())
 
-                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu') # Match device of iou_matrix if possible
+                gt_matched_flags = torch.zeros(num_gt, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu') 
                 tp_flags = torch.zeros(num_pred, dtype=torch.bool, device=pred_boxes.device if pred_boxes.is_cuda else 'cpu')
 
                 for pred_idx in range(num_pred):
@@ -271,32 +250,29 @@ def main_eval_cnn():
                 ap = calculate_ap(recall_steps.cpu().numpy(), precision_steps.cpu().numpy())
                 average_precisions_per_iou_cnn[iou_thresh_eval].append(ap)
 
-    # ... (Rest of mAP printing - no change) ...
     print("\n--- TRAINED CNN Detection Results (mAP) ---")
     for iou_thresh_eval, ap_list in average_precisions_per_iou_cnn.items():
         mean_ap_cnn = np.mean(ap_list) if ap_list else 0.0
         print(f"TRAINED CNN mAP @ IoU={iou_thresh_eval:.1f}: {mean_ap_cnn:.4f}")
 
 
-    # --- Intention Prediction Evaluation for CNN ---
     print("\n--- Calculating Intention Prediction Metrics for TRAINED CNN Model ---")
     matched_pred_intentions_cnn = []
     matched_gt_intentions_cnn = []
     if not all_sample_results_cnn:
         print("WARNING: 'all_sample_results_cnn' is empty. Cannot calculate intention metrics.")
     else:
-        # Determine which IoU function to use based on the flag (same as mAP)
         iou_func_for_matching = compute_rotated_iou if (EVAL_USE_ROTATED_IOU and SHAPELY_AVAILABLE) else compute_axis_aligned_iou
         if EVAL_USE_ROTATED_IOU and not SHAPELY_AVAILABLE:
-             iou_func_for_matching = compute_axis_aligned_iou # Fallback
+             iou_func_for_matching = compute_axis_aligned_iou 
         
         print(f"  Using IoU function for intention matching: {iou_func_for_matching.__name__}")
 
         for sample_result in tqdm(all_sample_results_cnn, desc="Matching for Intention Eval (CNN)", unit="sample"):
             pred_scores = sample_result['pred_scores']
-            pred_boxes = sample_result['pred_boxes_xywha'] # [cx, cy, w, l, angle_rad]
+            pred_boxes = sample_result['pred_boxes_xywha'] 
             pred_intentions = sample_result['pred_intentions']
-            gt_boxes = sample_result['gt_boxes_xywha']   # [cx, cy, w, l, angle_rad]
+            gt_boxes = sample_result['gt_boxes_xywha']  
             gt_intentions = sample_result['gt_intentions']
 
             num_gt = gt_boxes.shape[0]
@@ -305,10 +281,9 @@ def main_eval_cnn():
             if num_gt == 0 or num_pred_after_nms == 0:
                 continue
             
-            # Use the selected IoU function for matching
             if iou_func_for_matching == compute_rotated_iou:
                 iou_matrix_intent = iou_func_for_matching(pred_boxes.float(), gt_boxes.float())
-            else: # compute_axis_aligned_iou
+            else: 
                 iou_matrix_intent = iou_func_for_matching(pred_boxes[:, :4].float(), gt_boxes[:, :4].float())
 
             gt_matched_for_intent = torch.zeros(num_gt, dtype=torch.bool)
@@ -326,7 +301,6 @@ def main_eval_cnn():
                         matched_pred_intentions_cnn.append(pred_intentions[pred_idx].item())
                         matched_gt_intentions_cnn.append(gt_intentions[best_gt_idx_for_pred].item())
     
-    # ... (Rest of intention metrics printing - no change) ...
     if matched_pred_intentions_cnn:
         print(f"\n--- TRAINED CNN Intention Prediction Results (on TP detections @ IoU>={IOU_THRESHOLD_FOR_INTENTION_MATCH}) ---")
         labels_report = list(range(NUM_INTENTION_CLASSES))
